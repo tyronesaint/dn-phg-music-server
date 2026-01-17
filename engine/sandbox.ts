@@ -1,847 +1,888 @@
 import { ScriptInfo, MusicUrlRequest, MusicUrlResponse } from "./script_engine.ts";
 import { RequestManager } from "./request_manager.ts";
-import { LXGlobal, EVENT_NAMES } from "./lx_global.ts";
 
 export class Sandbox {
   private scriptInfo: ScriptInfo;
   private requestManager: RequestManager;
-  private lxGlobal: LXGlobal;
-  private sourceHandlers: Map<string, any> = new Map();
   private isInitialized: boolean = false;
+  private registeredSources: Map<string, any> = new Map();
+  private requestHandler: any = null;
 
   constructor(scriptInfo: ScriptInfo, requestManager: RequestManager) {
     this.scriptInfo = scriptInfo;
     this.requestManager = requestManager;
-    this.lxGlobal = new LXGlobal(scriptInfo, requestManager);
   }
 
   async initialize(): Promise<void> {
     try {
-      const lxObject = this.lxGlobal.createGlobalObject();
-      await this.executeScript(this.scriptInfo.rawScript, lxObject);
+      console.log('[Sandbox] 开始初始化脚本:', this.scriptInfo.name);
       
-      console.log(`🔍 脚本执行完成`);
-      
-      const registeredSources = this.lxGlobal.getRegisteredSourceList();
-      console.log(`🔍 脚本注册的音源: ${registeredSources.join(', ') || '无'}`);
-      
-      if (registeredSources.length > 0) {
-        registeredSources.forEach((source: string) => {
-          this.setSourceHandler(source, this.handleRequest.bind(this));
-        });
-        console.log(`📋 已注册音源: ${registeredSources.join(', ')}`);
-      } else {
-        console.warn(`⚠️ 脚本未注册任何音源: ${this.scriptInfo.name}`);
-      }
-      
-      this.isInitialized = true;
-      console.log(`🔒 Sandbox 初始化完成: ${this.scriptInfo.name}`);
-    } catch (error) {
-      console.error(`❌ Sandbox 初始化失败: ${this.scriptInfo.name}`, error);
-      console.log(`⚠️ 脚本初始化时出现错误，但服务器将继续运行`);
-    }
-  }
-
-  private async executeScript(script: string, lxObject: any): Promise<void> {
-    try {
-      console.log(`🔍 开始执行脚本，脚本长度: ${script.length}`);
-      console.log(`🔍 脚本前500字符: ${script.substring(0, 500)}`);
-      console.log(`🔍 脚本包含 lx.on: ${script.includes('lx.on')}`);
-      console.log(`🔍 脚本包含 lx.on('request': ${script.includes("lx.on('request'")}`);
-      console.log(`🔍 lxObject.on 函数: ${typeof lxObject.on}`);
-      console.log(`🔍 lxObject.send 函数: ${typeof lxObject.send}`);
-      
-      const originalConsole = globalThis.console;
-      
-      const scriptConsole = {
-        log: (...args: any[]) => originalConsole.log('[Script]', ...args),
-        error: (...args: any[]) => originalConsole.error('[Script]', ...args),
-        warn: (...args: any[]) => originalConsole.warn('[Script]', ...args),
-        info: (...args: any[]) => originalConsole.info('[Script]', ...args),
+      // 完全按照桌面版的实现
+      const allSources = ['kw', 'kg', 'tx', 'wy', 'mg', 'local'];
+      const supportQualitys = {
+        kw: ['128k', '320k', 'flac', 'flac24bit'],
+        kg: ['128k', '320k', 'flac', 'flac24bit'],
+        tx: ['128k', '320k', 'flac', 'flac24bit'],
+        wy: ['128k', '320k', 'flac', 'flac24bit'],
+        mg: ['128k', '320k', 'flac', 'flac24bit'],
+        local: [],
       };
-      
-      globalThis.console = scriptConsole as any;
-      
-      try {
-        console.log(`🔍 设置全局 lx 对象`);
-        
-        (globalThis as any).lx = lxObject;
-        
-        console.log(`🔍 设置浏览器 API 模拟`);
-        
-        const originalWindow = (globalThis as any).window;
-        const originalDocument = (globalThis as any).document;
-        const originalNavigator = (globalThis as any).navigator;
-        const originalLocation = (globalThis as any).location;
-        const originalHistory = (globalThis as any).history;
-        const originalXMLHttpRequest = (globalThis as any).XMLHttpRequest;
-        const originalWebSocket = (globalThis as any).WebSocket;
-        const originalFetch = (globalThis as any).fetch;
-        
-        const mockWindow = {
-          ...globalThis,
-          location: {
-            href: 'http://localhost:8080',
-            protocol: 'http:',
-            host: 'localhost:8080',
-            hostname: 'localhost',
-            port: '8080',
-            pathname: '/',
-            search: '',
-            hash: '',
-            origin: 'http://localhost:8080',
-          },
-          history: {
-            pushState: () => {},
-            replaceState: () => {},
-            go: () => {},
-            back: () => {},
-            forward: () => {},
-          },
-          screen: {
-            width: 1920,
-            height: 1080,
-            availWidth: 1920,
-            availHeight: 1080,
-          },
-          devicePixelRatio: 1,
-          innerWidth: 1920,
-          innerHeight: 1080,
-          outerWidth: 1920,
-          outerHeight: 1080,
-          scrollX: 0,
-          scrollY: 0,
-          pageXOffset: 0,
-          pageYOffset: 0,
-          scrollTo: () => {},
-          scrollBy: () => {},
-          getComputedStyle: () => ({
-            getPropertyValue: () => '',
-          }),
-          requestAnimationFrame: (callback: Function) => setTimeout(callback, 16),
-          cancelAnimationFrame: (id: number) => clearTimeout(id),
-          setTimeout: (callback: Function, delay: number) => setTimeout(callback, delay),
-          setInterval: (callback: Function, delay: number) => setInterval(callback, delay),
-          clearTimeout: clearTimeout,
-          clearInterval: clearInterval,
-          atob: (str: string) => {
-            const binaryString = atob(str);
-            return binaryString;
-          },
-          btoa: (str: string) => {
-            return btoa(str);
-          },
-          encodeURIComponent: encodeURIComponent,
-          decodeURIComponent: decodeURIComponent,
-          encodeURI: encodeURI,
-          decodeURI: decodeURI,
-          escape: escape,
-          unescape: unescape,
-          isFinite: isFinite,
-          isNaN: isNaN,
-          parseFloat: parseFloat,
-          parseInt: parseInt,
-          JSON: JSON,
-          Math: Math,
-          Date: Date,
-          Array: Array,
-          Object: Object,
-          String: String,
-          Number: Number,
-          Boolean: Boolean,
-          RegExp: RegExp,
-          Error: Error,
-          TypeError: TypeError,
-          ReferenceError: ReferenceError,
-          SyntaxError: SyntaxError,
-          URIError: URIError,
-          EvalError: EvalError,
-          Map: Map,
-          Set: Set,
-          WeakMap: WeakMap,
-          WeakSet: WeakSet,
-          Promise: Promise,
-          Proxy: Proxy,
-          Reflect: Reflect,
-          Symbol: Symbol,
-          BigInt: BigInt,
-          Int8Array: Int8Array,
-          Uint8Array: Uint8Array,
-          Uint8ClampedArray: Uint8ClampedArray,
-          Int16Array: Int16Array,
-          Uint16Array: Uint16Array,
-          Int32Array: Int32Array,
-          Uint32Array: Uint32Array,
-          Float32Array: Float32Array,
-          Float64Array: Float64Array,
-          DataView: DataView,
-          ArrayBuffer: ArrayBuffer,
-          SharedArrayBuffer: SharedArrayBuffer,
-          Atomics: Atomics,
-          console: console,
+      const supportActions = {
+        kw: ['musicUrl'],
+        kg: ['musicUrl'],
+        tx: ['musicUrl'],
+        wy: ['musicUrl'],
+        mg: ['musicUrl'],
+        xm: ['musicUrl'],
+        local: ['musicUrl', 'lyric', 'pic'],
+      };
+
+      // 设置全局变量
+      (globalThis as any).DEV_ENABLE = false;
+      (globalThis as any).UPDATE_ENABLE = true;
+      (globalThis as any).API_URL = '';
+      (globalThis as any).API_KEY = '';
+      (globalThis as any).MUSIC_QUALITY = {
+        '128k': 128000,
+        '320k': 320000,
+        'flac': 999000,
+        'flac24bit': 999000,
+      };
+      (globalThis as any).MUSIC_SOURCE = 'kw';
+
+      // 设置事件系统
+      const EVENT_NAMES = {
+        request: 'request',
+        inited: 'inited',
+        updateAlert: 'updateAlert',
+      };
+
+      let isInited = false;
+      let isShowedUpdateAlert = false;
+      let isInitedApi = false;
+      let events = { request: null };
+      let eventNames = Object.values(EVENT_NAMES);
+      let initError = null;
+
+      // 设置全局事件对象
+      (globalThis as any).events = events;
+      (globalThis as any).EVENT_NAMES = EVENT_NAMES;
+      (globalThis as any).isInited = isInited;
+      (globalThis as any).isShowedUpdateAlert = isShowedUpdateAlert;
+      (globalThis as any).isInitedApi = isInitedApi;
+      (globalThis as any).initError = initError;
+
+      // 设置全局错误处理器
+      (globalThis as any).__lx_init_error_handler__ = {
+        sendError: (errorMessage: string) => {
+          if (isInitedApi) return;
+          isInitedApi = true;
+          console.error('[Sandbox] 脚本初始化错误:', errorMessage);
+          initError = errorMessage;
+        }
+      };
+
+      // 添加全局错误监听器
+      if (typeof globalThis.addEventListener === 'undefined') {
+        (globalThis as any).addEventListener = (eventType: string, handler: any) => {
+          console.log('[Sandbox] 添加事件监听器:', eventType);
         };
+      }
+
+      globalThis.addEventListener('error', (event: any) => {
+        console.error('[Sandbox] 脚本运行时错误:', event.message);
+        console.error('[Sandbox] 错误详情:', event);
+      });
+
+      globalThis.addEventListener('unhandledrejection', (event: any) => {
+        console.error('[Sandbox] 脚本未处理的Promise拒绝:', event.reason);
+        console.error('[Sandbox] Promise拒绝详情:', event);
+      });
+
+      // 设置初始化错误处理器
+      globalThis.addEventListener('error', (event: any) => {
+        if (event.isTrusted) (globalThis as any).__lx_init_error_handler__.sendError(event.message.replace(/^Uncaught\\sError:\\s/, ''));
+      });
+
+      globalThis.addEventListener('unhandledrejection', (event: any) => {
+        if (!event.isTrusted) return;
+        const message = typeof event.reason === 'string' ? event.reason : event.reason?.message ?? String(event.reason);
+        (globalThis as any).__lx_init_error_handler__.sendError(message.replace(/^Error:\\s/, ''));
+      });
+
+      // 创建响应对象
+      let _internalResponse: any = {
+        statusCode: 0,
+        statusMessage: 'No response',
+        headers: {},
+        bytes: 0,
+        raw: new Uint8Array(0),
+        body: null
+      };
+
+      // 创建API对象
+      const API = new Proxy({}, {
+        get: (target: any, prop: string) => {
+          if (prop === 'Response') {
+            console.log('[Sandbox] API.Response get:', _internalResponse);
+            return _internalResponse;
+          }
+          return target[prop];
+        },
+        set: (target: any, prop: string, value: any) => {
+          if (prop === 'Response') {
+            console.log('[Sandbox] API.Response set:', value);
+            if (value && typeof value === 'object' && 'body' in value) {
+              _internalResponse = value;
+            } else {
+              console.log('[Sandbox] API.Response set to invalid value, keeping current');
+            }
+            return true;
+          }
+          target[prop] = value;
+          return true;
+        }
+      });
+
+      (globalThis as any).API = API;
+      (globalThis as any)._internalResponse = _internalResponse;
+
+      // 设置全局响应变量
+      (globalThis as any).response = null;
+      (globalThis as any).APIResponse = null;
+      (globalThis as any).apiResponse = null;
+      (globalThis as any).api_response = null;
+
+      // 创建request函数（完全按照桌面版实现）
+      const request = function(this: any, url: string, options: any, callback: any) {
+        console.log('[Sandbox] request called:');
+        console.log('[Sandbox]   URL:', url);
+        console.log('[Sandbox]   Options:', JSON.stringify(options, null, 2));
         
-        (globalThis as any).window = mockWindow;
-        (globalThis as any).self = mockWindow;
-        (globalThis as any).top = mockWindow;
-        (globalThis as any).parent = mockWindow;
-        (globalThis as any).document = {
-          createElement: (tagName: string) => {
-            const element: any = {
-              tagName: tagName.toUpperCase(),
-              attributes: {},
-              style: {},
-              classList: {
-                add: () => {},
-                remove: () => {},
-                contains: () => false,
-                toggle: () => {},
-              },
-              setAttribute: (name: string, value: string) => {
-                element.attributes[name] = value;
-              },
-              getAttribute: (name: string) => element.attributes[name] || null,
-              removeAttribute: (name: string) => {
-                delete element.attributes[name];
-              },
-              appendChild: () => {},
-              removeChild: () => {},
-              insertBefore: () => {},
-              replaceChild: () => {},
-              cloneNode: () => element,
-              querySelector: () => null,
-              querySelectorAll: () => [],
-              getElementById: () => null,
-              getElementsByClassName: () => [],
-              getElementsByTagName: () => [],
-              getElementsByName: () => [],
-              addEventListener: () => {},
-              removeEventListener: () => {},
-              dispatchEvent: () => true,
-            };
-            return element;
-          },
-          createTextNode: () => ({
-            nodeValue: '',
-            data: '',
-          }),
-          createDocumentFragment: () => ({
-            appendChild: () => {},
-            removeChild: () => {},
-          }),
-          getElementById: () => null,
-          getElementsByClassName: () => [],
-          getElementsByTagName: () => [],
-          getElementsByName: () => [],
-          querySelector: () => null,
-          querySelectorAll: () => [],
-          body: {
-            appendChild: () => {},
-            removeChild: () => {},
-          },
-          head: {
-            appendChild: () => {},
-            removeChild: () => {},
-          },
-          documentElement: {
-            appendChild: () => {},
-            removeChild: () => {},
-          },
-          readyState: 'complete',
-          cookie: '',
-          title: '',
-          URL: 'http://localhost:8080/',
-          domain: 'localhost',
-          referrer: '',
-          addEventListener: () => {},
-          removeEventListener: () => {},
-          dispatchEvent: () => true,
+        // 替换不可用的 API 服务器
+        const oldUrl = url;
+        if (url.includes('88.lxmusic.xn--fiqs8s')) {
+          // 移除 sign 参数并替换 API 服务器
+          url = url.replace('88.lxmusic.xn--fiqs8s/lxmusicv4', 'lxmusicapi.onrender.com');
+          // 移除 sign 参数
+          const urlObj = new URL(url);
+          urlObj.searchParams.delete('sign');
+          url = urlObj.toString();
+          console.log('[Sandbox]   URL 替换:', oldUrl, '->', url);
+        }
+        
+        const method = options && options.method ? options.method : 'get';
+        const timeout = options && options.response_timeout ? options.response_timeout : 60000;
+        const headers = options && options.headers ? options.headers : {};
+        const data = options && options.body ? options.body : undefined;
+        const form = options && options.form ? options.form : undefined;
+        const formData = options && options.formData ? options.formData : undefined;
+
+        // 替换 API KEY
+        if (oldUrl.includes('88.lxmusic.xn--fiqs8s') && headers && headers['X-Request-Key'] === 'lxmusic') {
+          headers['X-Request-Key'] = 'share-v2';
+          console.log('[Sandbox]   API KEY 替换: lxmusic -> share-v2');
+        }
+
+        console.log('[Sandbox]   Method:', method);
+        console.log('[Sandbox]   Headers:', JSON.stringify(headers, null, 2));
+        console.log('[Sandbox]   Body:', data ? data.substring(0, 100) : 'undefined');
+        console.log('[Sandbox]   Form:', form ? JSON.stringify(form).substring(0, 100) : 'undefined');
+        console.log('[Sandbox]   FormData:', formData ? 'present' : 'undefined');
+
+        // 按照桌面版实现，使用fetch但模拟needle的行为
+        const fetchOptions: any = {
+          method: method,
+          headers: headers,
         };
-        (globalThis as any).navigator = {
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          platform: 'MacIntel',
-          appName: 'Netscape',
-          appVersion: '5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          language: 'zh-CN',
-          languages: ['zh-CN', 'zh', 'en'],
-          vendor: 'Google Inc.',
-          vendorSub: '',
-          product: 'Gecko',
-          productSub: '20030107',
-          hardwareConcurrency: 8,
-          maxTouchPoints: 0,
-          cookieEnabled: true,
-          onLine: true,
-          javaEnabled: () => false,
-          sendBeacon: () => true,
-        };
-        (globalThis as any).location = mockWindow.location;
-        (globalThis as any).history = mockWindow.history;
-        (globalThis as any).XMLHttpRequest = (() => {
-          const requestManager = this.requestManager;
-          
-          return class {
-            private readyState: number = 0;
-            private status: number = 0;
-            private statusText: string = '';
-            private responseHeaders: Record<string, string> = {};
-            private responseText: string = '';
-            private response: any = null;
-            private _method: string = '';
-            private _url: string = '';
-            private _async: boolean = true;
-            private _requestHeaders: Record<string, string> = {};
-            private _onreadystatechange: Function | null = null;
-            private _onload: Function | null = null;
-            private _onerror: Function | null = null;
-            private _ontimeout: Function | null = null;
-            private _timeout: number = 0;
-            private _abortController: AbortController | null = null;
 
-            open(method: string, url: string, async: boolean = true) {
-              this._method = method;
-              this._url = url;
-              this._async = async;
-              this.readyState = 1;
-              this._triggerReadyStateChange();
-            }
-
-            send(body?: any) {
-              if (!this._url) {
-                throw new Error('URL not set');
-              }
-
-              this._abortController = new AbortController();
-              
-              const headers: Record<string, string> = { ...this._requestHeaders };
-              
-              const requestOptions = {
-                url: this._url,
-                method: this._method,
-                headers,
-                timeout: this._timeout || 60000,
-                body,
-              };
-
-              requestManager.addRequest(requestOptions, (error: Error | null, response: any | null, responseBody: any) => {
-                if (error) {
-                  this.readyState = 4;
-                  this.status = 0;
-                  this.statusText = error.message || 'Error';
-                  if (this._onerror) {
-                    this._onerror.call(this, error);
-                  }
-                  this._triggerReadyStateChange();
-                  return;
-                }
-
-                if (response) {
-                  this.status = response.statusCode;
-                  this.statusText = response.statusMessage;
-                  this.responseHeaders = response.headers || {};
-                  this.responseText = typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody);
-                  this.response = responseBody;
-                  this.readyState = 4;
-                  
-                  if (this._onload) {
-                    this._onload.call(this, { target: this });
-                  }
-                  this._triggerReadyStateChange();
-                }
-              });
-            }
-
-            setRequestHeader(name: string, value: string) {
-              this._requestHeaders[name] = value;
-            }
-
-            getResponseHeader(name: string): string | null {
-              return this.responseHeaders[name.toLowerCase()] || null;
-            }
-
-            getAllResponseHeaders(): string {
-              return Object.entries(this.responseHeaders)
-                .map(([key, value]) => `${key}: ${value}`)
-                .join('\r\n');
-            }
-
-            abort() {
-              if (this._abortController) {
-                this._abortController.abort();
-              }
-              this.readyState = 0;
-            }
-
-            get onreadystatechange() {
-              return this._onreadystatechange;
-            }
-
-            set onreadystatechange(handler: Function | null) {
-              this._onreadystatechange = handler;
-            }
-
-            get onload() {
-              return this._onload;
-            }
-
-            set onload(handler: Function | null) {
-              this._onload = handler;
-            }
-
-            get onerror() {
-              return this._onerror;
-            }
-
-            set onerror(handler: Function | null) {
-              this._onerror = handler;
-            }
-
-            get ontimeout() {
-              return this._ontimeout;
-            }
-
-            set ontimeout(handler: Function | null) {
-              this._ontimeout = handler;
-            }
-
-            get timeout() {
-              return this._timeout;
-            }
-
-            set timeout(value: number) {
-              this._timeout = value;
-            }
-
-            private _triggerReadyStateChange() {
-              if (this._onreadystatechange) {
-                this._onreadystatechange.call(this);
-              }
-            }
+        if (data) {
+          fetchOptions.body = data;
+        } else if (form) {
+          fetchOptions.body = new URLSearchParams(form).toString();
+          fetchOptions.headers = {
+            ...headers,
+            'Content-Type': 'application/x-www-form-urlencoded'
           };
-        })();
+        } else if (formData) {
+          fetchOptions.body = formData;
+          fetchOptions.headers = {
+            ...headers,
+            'Content-Type': 'multipart/form-data'
+          };
+        }
 
-        (globalThis as any).fetch = (() => {
-          const requestManager = this.requestManager;
-          const nativeFetch = originalFetch;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => { controller.abort(); }, timeout);
+
+        fetchOptions.signal = controller.signal;
+
+        const lxContext = this;
+
+        fetch(url, fetchOptions).then((response: any) => {
+          clearTimeout(timeoutId);
+          console.log('[Sandbox] Response received:');
+          console.log('[Sandbox]   Status:', response.status, response.statusText);
+          console.log('[Sandbox]   Headers:', JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2));
           
-          return async function fetch(url: string | Request, init?: RequestInit): Promise<Response> {
-            const method = init?.method || 'GET';
-            const headers = init?.headers as Record<string, string> || {};
-            const body = init?.body;
-            const signal = init?.signal || null;
-
-            let requestBody: any;
-            let formData: Record<string, any> | undefined;
-            let form: Record<string, any> | undefined;
-
-            if (typeof body === 'string') {
-              requestBody = body;
-            } else if (body instanceof FormData) {
-              formData = {};
-              for (const [key, value] of body.entries()) {
-                formData[key] = value;
-              }
-            } else if (body instanceof URLSearchParams) {
-              form = {};
-              for (const [key, value] of body.entries()) {
-                form[key] = value;
-              }
-            } else if (body && typeof body === 'object') {
-              requestBody = body;
+          return response.arrayBuffer().then((responseBody: ArrayBuffer) => {
+            const bytes = responseBody.byteLength;
+            const rawUint8Array = new Uint8Array(responseBody);
+            const rawString = new TextDecoder().decode(responseBody);
+            let body = rawString;
+            try { body = JSON.parse(rawString); } catch (e) {}
+            
+            const headersObj: any = {};
+            if (typeof response.headers.forEach === 'function') {
+              response.headers.forEach((value: string, key: string) => {
+                headersObj[key] = value;
+              });
+            } else {
+              Object.assign(headersObj, response.headers || {});
             }
-
-            const urlString = typeof url === 'string' ? url : url.url;
-
-            const requestOptions = {
-              url: urlString,
-              method,
-              headers,
-              timeout: 60000,
-              body: requestBody,
-              form,
-              formData,
+            
+            const respObj = { 
+              statusCode: response.status, 
+              statusMessage: response.statusText, 
+              headers: headersObj, 
+              bytes: bytes, 
+              raw: rawUint8Array, 
+              body: body 
             };
+            
+            _internalResponse = respObj;
+            
+            console.log('[Sandbox] Response body preview:', typeof body === 'string' ? body.substring(0, 200) : JSON.stringify(body).substring(0, 200));
+            const bodyObj = typeof body === 'object' && body ? body : {};
+            console.log('[Sandbox] 准备调用 callback, body.url:', (bodyObj as any).url);
+            
+            if (callback) {
+              // 确保 resp.body 包含解析后的 body
+              const enhancedResp = {
+                ...respObj,
+                body: body
+              };
+              console.log('[Sandbox] 调用 callback，使用 enhancedResp.body');
+              // 只传递 enhancedResp，让脚本从 resp.body 获取 body
+              const callbackResult = callback.call(lxContext, null, enhancedResp);
+              console.log('[Sandbox] callback 返回:', callbackResult);
+            }
+          });
+        }).catch((error: any) => {
+          clearTimeout(timeoutId);
+          const respObj = { 
+            statusCode: 0, 
+            statusMessage: error.message || 'Network error', 
+            headers: {}, 
+            bytes: 0, 
+            raw: new Uint8Array(0), 
+            body: null 
+          };
+          _internalResponse = respObj;
+          if (callback) callback.call(lxContext, error, null, null);
+        });
 
-            if (nativeFetch) {
-              try {
-                const nativeResponse = await nativeFetch(urlString, {
-                  method,
-                  headers,
-                  body: requestBody,
-                  signal,
-                });
+        return () => { 
+          if (!controller.signal.aborted) controller.abort(); 
+        };
+      };
 
-                const responseBody = await nativeResponse.arrayBuffer();
-                const bytes = responseBody.byteLength;
+      // 创建send函数（完全按照桌面版实现）
+      const send = (eventName: string, data: any) => {
+        console.log('[Sandbox] send called:', eventName, data);
+        return new Promise((resolve, reject) => {
+          if (!eventNames.includes(eventName)) return reject(new Error('The event is not supported: ' + eventName));
+          switch (eventName) {
+            case EVENT_NAMES.inited:
+              console.log('[Sandbox] 脚本调用 send(inited)');
+              if (isInitedApi) return reject(new Error('Script is inited'));
+              isInitedApi = true;
+              if ((globalThis as any)._handleInit) {
+                (globalThis as any)._handleInit(data).then(() => { resolve(); }).catch(reject);
+              } else {
+                console.log('[Sandbox] _handleInit 不存在，直接resolve');
+                resolve();
+              }
+              break;
+            case EVENT_NAMES.updateAlert:
+              if (isShowedUpdateAlert) return reject(new Error('The update alert can only be called once.'));
+              isShowedUpdateAlert = true;
+              if ((globalThis as any)._handleUpdateAlert) {
+                (globalThis as any)._handleUpdateAlert(data).then(resolve).catch(reject);
+              } else {
+                resolve();
+              }
+              break;
+            default:
+              reject(new Error('Unknown event name: ' + eventName));
+          }
+        });
+      };
 
-                const rawUint8Array = new Uint8Array(responseBody);
-                const rawString = new TextDecoder().decode(responseBody);
-                let parsedBody: any = rawString;
+      // 创建on函数（完全按照桌面版实现）
+      const on = (eventName: string, handler: any) => {
+        console.log('[Sandbox] on called:', eventName);
+        if (!eventNames.includes(eventName)) return Promise.reject(new Error('The event is not supported: ' + eventName));
+        switch (eventName) {
+          case EVENT_NAMES.request:
+            events.request = handler;
+            console.log('[Sandbox] events.request 已设置');
+            
+            // 包装原始handler，添加日志
+            const originalHandler = handler;
+            events.request = function(...args: any[]) {
+              console.log('[Sandbox] events.request 被调用:');
+              console.log('[Sandbox]   Args:', JSON.stringify(args, null, 2));
+              const result = originalHandler.apply(this, args);
+              console.log('[Sandbox]   Result type:', typeof result);
+              console.log('[Sandbox]   Result:', result ? (typeof result === 'string' ? result.substring(0, 200) : 'Promise') : 'undefined');
+              return result;
+            };
+            break;
+          default:
+            return Promise.reject(new Error('The event is not supported: ' + eventName));
+        }
+        return Promise.resolve();
+      };
 
-                try {
-                  parsedBody = JSON.parse(rawString);
-                } catch (e) {
-                  parsedBody = rawString;
-                }
+      // 创建utils对象（完全按照桌面版实现）
+      const utils = {
+        crypto: {
+          aesEncrypt: (buffer: any, mode: string, key: any, iv: any) => {
+            console.log('[Sandbox] aesEncrypt called');
+            // 简化实现，实际应该使用加密算法
+            return buffer;
+          },
+          rsaEncrypt: (buffer: any, key: string) => {
+            console.log('[Sandbox] rsaEncrypt called');
+            // 简化实现，实际应该使用RSA加密
+            return buffer;
+          },
+          randomBytes: (size: number) => {
+            const bytes = new Uint8Array(size);
+            crypto.getRandomValues(bytes);
+            return bytes;
+          },
+          md5: (str: string) => {
+            console.log('[Sandbox] md5 called:', str);
+            // 简化实现，实际应该使用MD5算法
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+              const char = str.charCodeAt(i);
+              hash = ((hash << 5) - hash) + char;
+              hash = hash & hash;
+            }
+            return Math.abs(hash).toString(16);
+          },
+        },
+        buffer: {
+          from: (...args: any[]) => {
+            if (typeof args[0] === 'string') return new TextEncoder().encode(args[0]);
+            return new Uint8Array(args[0]);
+          },
+          bufToString: (buf: any, format: string) => {
+            if (format === 'hex') {
+              return Array.from(buf).map((b: any) => (b as number).toString(16).padStart(2, '0')).join('');
+            }
+            return new TextDecoder().decode(buf);
+          },
+        },
+        zlib: {
+          inflate: (buf: any) => {
+            console.log('[Sandbox] inflate called');
+            // 简化实现，实际应该使用zlib解压
+            return new Promise((resolve) => { resolve(buf); });
+          },
+          deflate: (buf: any) => {
+            console.log('[Sandbox] deflate called');
+            // 简化实现，实际应该使用zlib压缩
+            return new Promise((resolve) => { resolve(buf); });
+          },
+        },
+      };
 
-                const responseInit: ResponseInit = {
-                  status: nativeResponse.status,
-                  statusText: nativeResponse.statusText,
-                  headers: nativeResponse.headers,
+      // 创建lx对象（完全按照桌面版实现）
+      const lx = {
+        EVENT_NAMES,
+        request,
+        send,
+        on,
+        utils,
+        currentScriptInfo: {
+          name: this.scriptInfo.name,
+          description: this.scriptInfo.description,
+          version: this.scriptInfo.version,
+          author: this.scriptInfo.author,
+          homepage: this.scriptInfo.homepage,
+          rawScript: this.scriptInfo.rawScript,
+        },
+        version: '2.0.0',
+        env: 'desktop',
+      };
+
+      (globalThis as any).lx = lx;
+
+      // 设置handleInit函数（完全按照桌面版实现）
+      (globalThis as any)._handleInit = (info: any) => {
+        console.log('[Sandbox] _handleInit called:', info);
+        return new Promise((resolve) => {
+          const sourceInfo = { sources: {} };
+          
+          try {
+            if (!info || !info.sources) {
+              console.log('[Sandbox] 脚本未提供音源信息，使用默认音源');
+              for (let i = 0; i < allSources.length; i++) {
+                const source = allSources[i];
+                sourceInfo.sources[source] = {
+                  type: 'music',
+                  actions: supportActions[source] || [],
+                  qualitys: supportQualitys[source] || [],
                 };
-
-                const responseObj = new Response(rawString, responseInit);
-                (responseObj as any)._raw = rawUint8Array;
-                (responseObj as any)._body = parsedBody;
-
-                return responseObj;
-              } catch (error: any) {
-                if (error.name === 'AbortError') {
-                  const abortError = new DOMException('The operation was aborted.', 'AbortError');
-                  throw abortError;
-                }
-                throw error;
               }
             } else {
-              return new Promise((resolve, reject) => {
-                const abortController = new AbortController();
-                const effectiveSignal = signal || abortController.signal;
-
-                requestManager.addRequest(requestOptions, (error: Error | null, response: any | null, responseBody: any) => {
-                  if (error) {
-                    if (error.message === 'Request cancelled') {
-                      const abortError = new DOMException('The operation was aborted.', 'AbortError');
-                      reject(abortError);
-                    } else {
-                      reject(error);
-                    }
-                    return;
-                  }
-
-                  if (!response) {
-                    reject(new Error('No response received'));
-                    return;
-                  }
-
-                  const headersMap = new Headers(response.headers);
-                  
-                  const responseInit: ResponseInit = {
-                    status: response.statusCode,
-                    statusText: response.statusMessage,
-                    headers: headersMap,
-                  };
-
-                  let bodyInit: BodyInit;
-                  if (typeof responseBody === 'string') {
-                    bodyInit = responseBody;
-                  } else if (responseBody instanceof Uint8Array) {
-                    bodyInit = new TextDecoder().decode(responseBody);
-                  } else if (responseBody && typeof responseBody === 'object') {
-                    bodyInit = JSON.stringify(responseBody);
-                  } else {
-                    bodyInit = '';
-                  }
-
-                  const responseObj = new Response(bodyInit, responseInit);
-                  
-                  (responseObj as any)._raw = response.raw;
-                  (responseObj as any)._body = responseBody;
-                  
-                  resolve(responseObj);
-                });
-
-                const handleAbort = () => {
-                  abortController.abort();
+              for (let i = 0; i < allSources.length; i++) {
+                const source = allSources[i];
+                const userSource = info.sources && info.sources[source];
+                if (!userSource || userSource.type !== 'music') continue;
+                const qualitys = supportQualitys[source];
+                const actions = supportActions[source];
+                sourceInfo.sources[source] = {
+                  type: 'music',
+                  actions: actions.filter((a: string) => userSource.actions.includes(a)),
+                  qualitys: qualitys.filter((q: string) => userSource.qualitys.includes(q)),
                 };
+              }
+            }
+            
+            console.log('[Sandbox] 注册的音源:', Object.keys(sourceInfo.sources));
+            (globalThis as any)._registeredSources = sourceInfo.sources;
+            (globalThis as any)._sources = sourceInfo.sources;
+            resolve();
+          } catch (error) {
+            console.error('[Sandbox] 初始化失败:', error);
+            resolve();
+          }
+        });
+      };
 
-                if (effectiveSignal) {
-                  if (effectiveSignal.aborted) {
-                    handleAbort();
-                  } else {
-                    effectiveSignal.addEventListener('abort', handleAbort);
+      // 设置handleUpdateAlert函数
+      (globalThis as any)._handleUpdateAlert = (data: any) => {
+        console.log('[Sandbox] _handleUpdateAlert called:', data);
+        return Promise.resolve();
+      };
+
+      // 设置全局对象
+      (globalThis as any).globalThis = globalThis;
+      (globalThis as any).window = globalThis;
+
+      // 添加 require 函数模拟（用于支持 Node.js 风格的模块加载）
+      (globalThis as any).require = (moduleName: string) => {
+        console.log('[Sandbox] require called:', moduleName);
+        switch (moduleName) {
+          case 'crypto':
+            return {
+              createHash: (algorithm: string) => ({
+                update: (data: string) => ({
+                  digest: (encoding: string) => {
+                    const hash = new TextEncoder().encode(data);
+                    const hashArray = Array.from(hash);
+                    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                    return hashHex;
                   }
-                }
-              });
+                })
+              })
+            };
+          case 'buffer':
+            return { Buffer };
+          default:
+            console.log('[Sandbox] Unknown module:', moduleName);
+            return {};
+        }
+      };
+
+      // 添加 regenerator runtime 支持（用于支持 async/await）
+      const mark = (genFun: any) => {
+        if (Object.setPrototypeOf) {
+          Object.setPrototypeOf(genFun, GeneratorFunctionPrototype);
+        } else {
+          genFun.__proto__ = GeneratorFunctionPrototype;
+        }
+        genFun.prototype = Object.create(Gp);
+        return genFun;
+      };
+
+      const wrap = (innerFn: any, outerFn: any, self: any, tryLocsList: any) => {
+        const protoGenerator = outerFn && outerFn.prototype instanceof Generator ? outerFn : Generator;
+        const generator = Object.create(protoGenerator.prototype);
+        const context = new Context(tryLocsList || []);
+        generator._invoke = makeInvokeMethod(innerFn, self, context);
+        return generator;
+      };
+
+      const tryCatch = (fn: any, obj: any, arg: any) => {
+        try {
+          return { type: "normal", arg: fn.call(obj, arg) };
+        } catch (err) {
+          return { type: "throw", arg: err };
+        }
+      };
+
+      const Generator = function() {};
+      const GeneratorFunction = function GeneratorFunction() {};
+      const GeneratorFunctionPrototype = GeneratorFunction.prototype;
+      const IteratorPrototype = {};
+      const Gp = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(IteratorPrototype);
+      Gp.constructor = GeneratorFunctionPrototype;
+      GeneratorFunctionPrototype.constructor = GeneratorFunction;
+      GeneratorFunction.displayName = "GeneratorFunction";
+
+      const defineIteratorMethods = (prototype: any) => {
+        ["next", "throw", "return"].forEach((method) => {
+          prototype[method] = function(arg: any) {
+            return this._invoke(method, arg);
+          };
+        });
+      };
+      defineIteratorMethods(Gp);
+
+      const AsyncIterator = function() {};
+      AsyncIterator.prototype = Gp;
+
+      const asyncIterator = (innerFn: any, outerFn: any, self: any) => {
+        const iter = wrap(innerFn, outerFn, self, []);
+        return new Promise((resolve, reject) => {
+          const step = () => {
+            const result = iter.next();
+            if (result.done) {
+              resolve(result.value);
+            } else {
+              Promise.resolve(result.value).then(
+                (val) => { step(); },
+                (err) => { iter.throw(err); step(); }
+              );
             }
           };
-        })();
-        (globalThis as any).WebSocket = class {
-          constructor() {}
-          send() {}
-          close() {}
-        };
-        (globalThis as any).localStorage = {
-          getItem: (key: string) => null,
-          setItem: (key: string, value: string) => {},
-          removeItem: (key: string) => {},
-          clear: () => {},
-          key: (index: number) => null,
-          length: 0,
-        };
-        (globalThis as any).sessionStorage = {
-          getItem: (key: string) => null,
-          setItem: (key: string, value: string) => {},
-          removeItem: (key: string) => {},
-          clear: () => {},
-          key: (index: number) => null,
-          length: 0,
-        };
-        
-        (globalThis as any).__lx_init_error_handler__ = {
-          sendError: (errorMessage: string) => {
-            console.error(`❌ 脚本初始化错误: ${errorMessage}`);
-            if (!this.lxGlobal['isInited']) {
-              this.lxGlobal['isInited'] = true;
-              console.log(`⚠️ 脚本初始化失败，但服务器将继续运行`);
+          step();
+        });
+      };
+
+      const makeInvokeMethod = (innerFn: any, self: any, context: any) => {
+        let state = "suspendedStart";
+        return function(method: string, arg: any) {
+          if (state === "completed") {
+            throw new TypeError("Generator is already running");
+          }
+          if (state === "suspendedYield") {
+            state = "executing";
+          }
+          if (state === "executing") {
+            throw new TypeError("Generator is already running");
+          }
+          state = "executing";
+          const record = tryCatch(innerFn, self, context);
+          if (record.type === "normal") {
+            state = "completed";
+            if (record.arg === ContinueSentinel) {
+              context.next = context.sent;
+            } else {
+              context.sent = record.arg;
             }
-          },
-        };
-        
-        const originalUnhandledRejection = (globalThis as any).onunhandledrejection;
-        (globalThis as any).onunhandledrejection = (event: any) => {
-          console.error(`🔍 脚本中未捕获的 Promise 错误:`, event.reason);
-          console.error(`🔍 Promise 错误堆栈:`, event.reason?.stack);
-          event.preventDefault();
-        };
-        
-        const originalUncaughtException = (globalThis as any).onuncaughtException;
-        (globalThis as any).onuncaughtException = (error: any) => {
-          console.error(`🔍 脚本中未捕获的异常:`, error);
-          console.error(`🔍 异常堆栈:`, error?.stack);
-        };
-        
-        const originalWindowError = (globalThis as any).onerror;
-        (globalThis as any).onerror = (message: string, source: string, lineno: number, colno: number, error: Error) => {
-          console.error(`🔍 脚本中未捕获的错误:`, message);
-          console.error(`🔍 错误堆栈:`, error?.stack);
-          if ((globalThis as any).__lx_init_error_handler__) {
-            (globalThis as any).__lx_init_error_handler__.sendError(message.replace(/^Uncaught\sError:\s/, ''));
+            return { value: record.arg, done: false };
+          } else if (record.type === "throw") {
+            state = "completed";
+            throw record.arg;
           }
         };
-        
-        console.log(`🔍 开始执行脚本（直接执行，不包装）`);
-        
-        try {
-          const result = eval(script);
-          console.log(`🔍 脚本执行完成，返回值: ${typeof result}`);
-          
-          if (result instanceof Promise) {
-            console.log(`🔍 脚本返回 Promise，等待完成`);
-            try {
-              await result;
-              console.log(`🔍 脚本 Promise 完成`);
-            } catch (promiseError) {
-              console.error(`🔍 脚本 Promise 执行错误:`, promiseError);
-              console.log(`⚠️ 脚本初始化时出现错误，但服务器将继续运行`);
+      };
+
+      const ContinueSentinel = {};
+
+      const Context = function(tryLocsList: any) {
+        this.tryEntries = [{ tryLoc: "root" }];
+        tryLocsList.forEach((tryLoc: any) => {
+          this.tryEntries.push({ tryLoc: tryLoc });
+        });
+        this.reset(true);
+      };
+
+      Context.prototype.reset = function(skipTemp: any) {
+        this.prev = 0;
+        this.next = 0;
+        this.sent = this._sent = undefined;
+        this.done = false;
+        this.delegate = null;
+        this.method = "next";
+        this.arg = undefined;
+        this.tryEntries.forEach((tryEntry: any) => {
+          tryEntry.completion = { type: "normal", arg: undefined };
+        });
+        if (skipTemp) {
+          for (let i = 0; i < this.tryEntries.length; i++) {
+            const entry = this.tryEntries[i];
+            if (entry.tryLoc === "root") {
+              this.next = entry.afterLoc;
+              break;
             }
           }
-        } catch (scriptError) {
-          console.error(`🔍 脚本执行错误:`, scriptError);
-          console.log(`⚠️ 脚本初始化时出现错误，但服务器将继续运行`);
         }
-        
-        console.log(`🔍 等待 500ms 让所有异步操作完成`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        console.log(`🔍 异步操作等待完成`);
-        
-        console.log(`🔍 检查 lx.send 是否被调用: isInited=${this.lxGlobal['isInited']}`);
-        console.log(`🔍 检查注册的音源数量: ${this.lxGlobal.getRegisteredSourceList().length}`);
-        
-        if (!this.lxGlobal['isInited']) {
-          console.warn(`⚠️ 脚本未调用 lx.send('inited', ...)，音源可能未正确注册`);
+      };
+
+      (globalThis as any).regeneratorRuntime = {
+        wrap: wrap,
+        mark: mark,
+        async: asyncIterator,
+      };
+      (globalThis as any)._regeneratorRuntime = (globalThis as any).regeneratorRuntime;
+
+      // 执行脚本
+      console.log('[Sandbox] 开始执行脚本...');
+      console.log('[Sandbox] 脚本代码长度:', this.scriptInfo.rawScript.length);
+      
+      const startTime = Date.now();
+      
+      try {
+        const scriptFn = new Function(this.scriptInfo.rawScript);
+        scriptFn();
+        console.log('[Sandbox] 脚本执行完成');
+      } catch (evalError: any) {
+        console.error('[Sandbox] 脚本代码执行错误:', String(evalError));
+        if (evalError?.stack) {
+          console.error('[Sandbox] 错误堆栈:', String(evalError.stack));
         }
-        
-        (globalThis as any).onunhandledrejection = originalUnhandledRejection;
-        (globalThis as any).onuncaughtException = originalUncaughtException;
-        
-        console.log(`🔍 检查 lx 对象上的属性:`);
-        console.log(`🔍 lx.requestHandler: ${typeof lxObject.requestHandler}`);
-        console.log(`🔍 lx.on: ${typeof lxObject.on}`);
-        
-        if (typeof lxObject.requestHandler === 'function') {
-          console.log(`🔍 找到 lx.requestHandler，调用 lx.on('request', handler)`);
-          await lxObject.on(EVENT_NAMES.request, lxObject.requestHandler);
-        }
-        
-        console.log(`🔍 检查 lx 对象上的所有属性:`);
-        for (const key in lxObject) {
-          if (typeof lxObject[key] === 'function' && key !== 'on' && key !== 'send' && key !== 'request') {
-            console.log(`🔍 lx.${key}: ${typeof lxObject[key]}`);
-          }
-        }
-        
-        if (originalWindow !== undefined) {
-          (globalThis as any).window = originalWindow;
-        }
-        if (originalDocument !== undefined) {
-          (globalThis as any).document = originalDocument;
-        }
-        if (originalNavigator !== undefined) {
-          (globalThis as any).navigator = originalNavigator;
-        }
-      } finally {
-        globalThis.console = originalConsole;
       }
+      
+      const endTime = Date.now();
+      console.log('[Sandbox] 脚本代码执行完成, 耗时:', (endTime - startTime) + 'ms');
+
+      // 检查脚本是否正确初始化
+      setTimeout(() => {
+        console.log('[Sandbox] 检查脚本初始化状态...');
+        console.log('[Sandbox] isInitedApi:', (globalThis as any).isInitedApi);
+        console.log('[Sandbox] initError:', (globalThis as any).initError);
+        console.log('[Sandbox] _sources:', (globalThis as any)._sources);
+        console.log('[Sandbox] _registeredSources:', (globalThis as any)._registeredSources);
+        console.log('[Sandbox] events.request:', typeof (globalThis as any).events?.request);
+        
+        // 如果脚本没有正确初始化，尝试手动触发初始化
+        if (!(globalThis as any).isInitedApi && !(globalThis as any).initError) {
+          console.log('[Sandbox] 尝试手动触发脚本初始化...');
+          try {
+            if ((globalThis as any)._handleInit) {
+              (globalThis as any)._handleInit({
+                sources: {
+                  kw: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+                  kg: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+                  tx: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+                  wy: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+                  mg: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+                  local: { type: 'music', actions: ['musicUrl', 'lyric', 'pic'], qualitys: [] }
+                }
+              }).then(() => {
+                console.log('[Sandbox] 手动初始化完成');
+                (globalThis as any).isInitedApi = true;
+                (globalThis as any).isInited = true;
+              }).catch((error: any) => {
+                console.error('[Sandbox] 手动初始化失败:', error);
+                (globalThis as any).initError = error.message;
+              });
+            }
+          } catch (error: any) {
+            console.error('[Sandbox] 手动初始化异常:', error);
+          }
+        }
+      }, 1000);
+
+      this.isInitialized = true;
+      console.log('[Sandbox] 脚本初始化完成:', this.scriptInfo.name);
+      console.log('[Sandbox] 已注册音源:', JSON.stringify((globalThis as any)._sources ? Object.keys((globalThis as any)._sources) : []));
+      console.log('[Sandbox] events.request 是否存在:', typeof (globalThis as any).events?.request);
+      console.log('[Sandbox] lx.send 是否存在:', typeof (globalThis as any).lx?.send);
+      console.log('[Sandbox] lx.on 是否存在:', typeof (globalThis as any).lx?.on);
+      console.log('[Sandbox] initError:', (globalThis as any).initError);
+      console.log('[Sandbox] isInitedApi:', (globalThis as any).isInitedApi);
     } catch (error) {
-      console.error("脚本执行错误:", error);
-      throw error;
+      console.error('Sandbox 初始化失败: ' + this.scriptInfo.name, error);
     }
   }
 
-  private async handleRequest(data: MusicUrlRequest): Promise<any | null> {
-    console.log(`🔍 Sandbox.handleRequest 被调用: source=${data.source}, action=${data.action}`);
+  private handleInit(info: any): Promise<void> {
+    console.log('[Sandbox] handleInit called:', info);
+    return new Promise((resolve) => {
+      const sourceInfo = { sources: {} };
+      const allSources = ['kw', 'kg', 'tx', 'wy', 'mg', 'local'];
+      const supportQualitys = {
+        kw: ['128k', '320k', 'flac', 'flac24bit'],
+        kg: ['128k', '320k', 'flac', 'flac24bit'],
+        tx: ['128k', '320k', 'flac', 'flac24bit'],
+        wy: ['128k', '320k', 'flac', 'flac24bit'],
+        mg: ['128k', '320k', 'flac', 'flac24bit'],
+        local: [],
+      };
+      const supportActions = {
+        kw: ['musicUrl'],
+        kg: ['musicUrl'],
+        tx: ['musicUrl'],
+        wy: ['musicUrl'],
+        mg: ['musicUrl'],
+        xm: ['musicUrl'],
+        local: ['musicUrl', 'lyric', 'pic'],
+      };
+
+      try {
+        if (!info || !info.sources) {
+          console.log('[Sandbox] 脚本未提供音源信息，使用默认音源');
+          for (let i = 0; i < allSources.length; i++) {
+            const source = allSources[i];
+            sourceInfo.sources[source] = {
+              type: 'music',
+              actions: supportActions[source] || [],
+              qualitys: supportQualitys[source] || [],
+            };
+          }
+        } else {
+          for (let i = 0; i < allSources.length; i++) {
+            const source = allSources[i];
+            const userSource = info.sources && info.sources[source];
+            if (!userSource || userSource.type !== 'music') continue;
+            const qualitys = supportQualitys[source];
+            const actions = supportActions[source];
+            sourceInfo.sources[source] = {
+              type: 'music',
+              actions: actions.filter((a: string) => userSource.actions.includes(a)),
+              qualitys: qualitys.filter((q: string) => userSource.qualitys.includes(q)),
+            };
+          }
+        }
+        
+        console.log('[Sandbox] 注册的音源:', Object.keys(sourceInfo.sources));
+        (globalThis as any)._registeredSources = sourceInfo.sources;
+        (globalThis as any)._sources = sourceInfo.sources;
+        resolve();
+      } catch (error) {
+        console.error('[Sandbox] 初始化失败:', error);
+        resolve();
+      }
+    });
+  }
+
+  private handleUpdateAlert(data: any): Promise<void> {
+    console.log('[Sandbox] handleUpdateAlert called:', data);
+    return Promise.resolve();
+  }
+
+  async handleRequest(data: MusicUrlRequest): Promise<MusicUrlResponse | null> {
+    console.log('[Sandbox] handleRequest called:', data);
     
+    if (!this.isInitialized) {
+      console.log('[Sandbox] 脚本未初始化');
+      return null;
+    }
+
     try {
-      const result = await this.lxGlobal.handleRequest(data);
-      console.log(`✅ Sandbox.handleRequest 成功:`, result);
-      return result;
+      const handler = (globalThis as any).events?.request;
+      if (!handler) {
+        console.log('[Sandbox] Request event is not defined');
+        throw new Error('Request event is not defined');
+      }
+
+      console.log('[Sandbox] 调用脚本请求处理器...');
+      const result = await handler({ source: data.source, action: data.action, info: data.info });
+      console.log('[Sandbox] 脚本返回结果:', result);
+
+      if (data.action === 'musicUrl') {
+        if (typeof result !== 'string' || result.length > 2048 || !/^https?:/.test(result)) {
+          console.log('[Sandbox] 无效的音乐URL:', result);
+          throw new Error('Invalid music URL');
+        }
+        return {
+          source: data.source,
+          action: data.action,
+          data: {
+            type: data.info.type,
+            url: result,
+          },
+        };
+      } else if (data.action === 'lyric') {
+        if (typeof result !== 'object' || typeof result.lyric !== 'string') {
+          console.log('[Sandbox] 无效的歌词数据:', result);
+          throw new Error('Invalid lyric data');
+        }
+        if (result.lyric.length > 51200) {
+          console.log('[Sandbox] 歌词过长:', result.lyric.length);
+          throw new Error('Lyric too long');
+        }
+        return {
+          source: data.source,
+          action: data.action,
+          data: {
+            type: 'lyric',
+            lyric: result.lyric,
+            tlyric: (typeof result.tlyric == 'string' && result.tlyric.length < 5120) ? result.tlyric : null,
+            rlyric: (typeof result.rlyric == 'string' && result.rlyric.length < 5120) ? result.rlyric : null,
+            lxlyric: (typeof result.lxlyric == 'string' && result.lxlyric.length < 8192) ? result.lxlyric : null,
+          },
+        };
+      } else if (data.action === 'pic') {
+        if (typeof result !== 'string' || result.length > 2048 || !/^https?:/.test(result)) {
+          console.log('[Sandbox] 无效的图片URL:', result);
+          throw new Error('Invalid pic URL');
+        }
+        return {
+          source: data.source,
+          action: data.action,
+          data: {
+            type: 'pic',
+            url: result,
+          },
+        };
+      }
+
+      return null;
     } catch (error) {
-      console.error(`❌ 请求处理错误: ${this.scriptInfo.name}`, error);
-      
-      // 根据不同的操作类型返回错误响应
+      console.error('[Sandbox] Request 处理失败:', error);
       switch (data.action) {
         case 'musicUrl':
-          return {
-            source: this.getCurrentSource(),
-            action: data.action,
-            data: {
-              type: 'musicUrl',
-              url: null,
-            },
-          };
+          return { source: data.source, action: data.action, data: { type: 'musicUrl', url: '' } };
         case 'lyric':
-          return {
-            source: this.getCurrentSource(),
-            action: data.action,
-            data: {
-              type: 'lyric',
-              lyric: null,
-              tlyric: null,
-              rlyric: null,
-              lxlyric: null,
-            },
-          };
+          return { source: data.source, action: data.action, data: { type: 'lyric', lyric: '', tlyric: null, rlyric: null, lxlyric: null } };
         case 'pic':
-          return {
-            source: this.getCurrentSource(),
-            action: data.action,
-            data: {
-              type: 'pic',
-              url: null,
-            },
-          };
+          return { source: data.source, action: data.action, data: { type: 'pic', url: '' } };
         default:
           return null;
       }
     }
   }
 
-  private validateResponse(result: any, action: string): MusicUrlResponse | null {
-    if (!result) return null;
-
-    switch (action) {
-      case 'musicUrl':
-        let url: string;
-        let type: string;
-
-        if (typeof result === 'string') {
-          url = result;
-          type = 'musicUrl';
-        } else if (typeof result === 'object' && result.url && typeof result.url === 'string') {
-          url = result.url;
-          type = result.type || 'musicUrl';
-        } else {
-          console.warn('⚠️ 无效的音乐URL响应');
-          return null;
-        }
-
-        if (url.length > 2048 || !/^https?:/.test(url)) {
-          console.warn('⚠️ 无效的音乐URL');
-          return null;
-        }
-
-        return {
-          source: this.getCurrentSource(),
-          action,
-          data: {
-            type,
-            url,
-          },
-        };
-
-      case 'lyric':
-        if (typeof result !== 'object' || typeof result.lyric !== 'string') {
-          console.warn('⚠️ 无效的歌词响应');
-          return null;
-        }
-        return {
-          source: this.getCurrentSource(),
-          action,
-          data: {
-            type: 'lyric',
-            lyric: result.lyric,
-            tlyric: result.tlyric || null,
-            rlyric: result.rlyric || null,
-            lxlyric: result.lxlyric || null,
-          },
-        };
-
-      case 'pic':
-        if (typeof result !== 'string' || result.length > 2048 || !/^https?:/.test(result)) {
-          console.warn('⚠️ 无效的图片URL响应');
-          return null;
-        }
-        return {
-          source: this.getCurrentSource(),
-          action,
-          data: {
-            type: 'pic',
-            url: result,
-          },
-        };
-
-      default:
-        return null;
-    }
+  async request(data: MusicUrlRequest): Promise<MusicUrlResponse | null> {
+    return this.handleRequest(data);
   }
 
-  private getCurrentSource(): string {
-    return this.scriptInfo.id;
-  }
-
-  async request(request: MusicUrlRequest): Promise<MusicUrlResponse | null> {
-    console.log(`🔍 sandbox.request 被调用: ${this.scriptInfo.name}, action=${request.action}`);
-    
-    if (!this.isInitialized) {
-      throw new Error('Sandbox not initialized');
-    }
-
-    return this.handleRequest(request);
-  }
-
-  supportsSource(source: string): boolean {
-    return this.sourceHandlers.has(source);
-  }
-
-  setSourceHandler(source: string, handler: any): void {
-    this.sourceHandlers.set(source, handler);
-  }
-
-  async terminate(): Promise<void> {
-    try {
-      this.sourceHandlers.clear();
-      this.isInitialized = false;
-      console.log(`🔒 Sandbox 已终止: ${this.scriptInfo.name}`);
-    } catch (error) {
-      console.error(`终止 Sandbox 时出错: ${this.scriptInfo.name}`, error);
-    }
-  }
-
-  getScriptInfo(): ScriptInfo {
-    return this.scriptInfo;
+  getRegisteredSources(): string[] {
+    const sources = (globalThis as any)._registeredSources;
+    if (sources) return Object.keys(sources);
+    return ['kw', 'kg', 'tx', 'wy', 'mg'];
   }
 
   getRegisteredSourceList(): string[] {
-    return this.lxGlobal.getRegisteredSourceList();
+    return this.getRegisteredSources();
+  }
+
+  supportsSource(source: string): boolean {
+    const sources = (globalThis as any)._sources;
+    if (sources) return source in sources;
+    return ['kw', 'kg', 'tx', 'wy', 'mg'].includes(source);
+  }
+
+  setSourceHandler(source: string, handler: any): void {
+    this.registeredSources.set(source, handler);
+  }
+
+  async terminate(): Promise<void> {
+    this.isInitialized = false;
+    this.registeredSources.clear();
+  }
+
+  isReady(): boolean {
+    return this.isInitialized;
   }
 }

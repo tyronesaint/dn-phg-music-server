@@ -73,30 +73,46 @@ export class ScriptEngine {
 
   async loadScript(scriptInfo: ScriptInfo): Promise<boolean> {
     try {
-      console.log(`📜 加载脚本: ${scriptInfo.name}`);
-
       const sandbox = new Sandbox(scriptInfo, this.requestManager);
 
       await sandbox.initialize();
-
+      
       const registeredSources = sandbox.getRegisteredSourceList();
+      
+      let finalSources: string[];
+      
       if (registeredSources.length > 0) {
-        scriptInfo.supportedSources = registeredSources;
-        console.log(`📋 更新脚本支持的音源: ${registeredSources.join(', ')}`);
+        finalSources = registeredSources;
+      } else {
+        const fallbackSources = this.getFallbackSourcesForScript(scriptInfo);
+        if (fallbackSources.length > 0) {
+          finalSources = fallbackSources;
+        } else {
+          finalSources = [];
+        }
+      }
+      
+      if (finalSources.length > 0) {
+        scriptInfo.supportedSources = finalSources;
+        
+        for (const source of finalSources) {
+          if (!sandbox.supportsSource(source)) {
+            sandbox.setSourceHandler(source, async(request: MusicUrlRequest) => {
+              return this.handleScriptRequest(sandbox, request);
+            });
+          }
+        }
         
         if (this.storage) {
-          await this.storage.updateScriptSupportedSources(scriptInfo.id, registeredSources);
-          console.log(`💾 已更新存储中的脚本音源信息: ${scriptInfo.id}`);
+          await this.storage.updateScriptSupportedSources(scriptInfo.id, finalSources);
         }
       }
 
       this.sandboxes.set(scriptInfo.id, sandbox);
       this.activeScripts.set(scriptInfo.id, scriptInfo);
 
-      console.log(`✅ 脚本加载成功: ${scriptInfo.name}`);
       return true;
     } catch (error) {
-      console.error(`❌ 脚本加载失败: ${scriptInfo.name}`, error);
       return false;
     }
   }
@@ -107,28 +123,33 @@ export class ScriptEngine {
       await sandbox.terminate();
       this.sandboxes.delete(scriptId);
       this.activeScripts.delete(scriptId);
-      console.log(`🗑️ 脚本已卸载: ${scriptId}`);
     }
   }
 
   async getMusicUrl(request: MusicUrlRequest): Promise<MusicUrlResponse> {
     const { source, info } = request;
 
-    console.log(`🔍 getMusicUrl 被调用: source=${source}, info=${JSON.stringify(info)}`);
+    const triedScripts: string[] = [];
 
     for (const [scriptId, sandbox] of this.sandboxes) {
       try {
-        console.log(`🔍 检查脚本 ${scriptId} 是否支持音源 ${source}: ${sandbox.supportsSource(source)}`);
         if (sandbox.supportsSource(source)) {
+          triedScripts.push(scriptId);
           const response = await sandbox.request(request);
           if (response && response.data && request.action === 'musicUrl' && (response.data as MusicUrlData).url) {
             return response;
           }
-          console.log(`⚠️ 脚本 ${scriptId} 返回了无效响应，继续尝试下一个脚本`);
         }
-      } catch (error) {
-        console.error(`脚本执行错误 [${scriptId}]:`, error);
+      } catch (error: any) {
+        if (error.message.includes('404') || error.message.includes('Not Found') || error.message.includes('API') || error.message.includes('服务器')) {
+          continue;
+        }
+        throw error;
       }
+    }
+
+    if (triedScripts.length > 0) {
+      throw new Error(`所有可用脚本都执行失败: ${triedScripts.join(', ')}。请检查API服务器状态。`);
     }
 
     throw new Error(`No available script for source: ${source}`);
@@ -146,7 +167,6 @@ export class ScriptEngine {
           }
         }
       } catch (error) {
-        console.error(`脚本执行错误 [${scriptId}]:`, error);
       }
     }
 
@@ -165,7 +185,6 @@ export class ScriptEngine {
           }
         }
       } catch (error) {
-        console.error(`脚本执行错误 [${scriptId}]:`, error);
       }
     }
 
@@ -186,5 +205,40 @@ export class ScriptEngine {
     }
     this.sandboxes.clear();
     this.activeScripts.clear();
+  }
+
+  private getFallbackSourcesForScript(scriptInfo: ScriptInfo): string[] {
+    const scriptName = scriptInfo.name.toLowerCase();
+    const scriptId = scriptInfo.id.toLowerCase();
+    
+    if (scriptName.includes('flower') || scriptName.includes('野花')) {
+      return ['kw', 'kg', 'tx', 'wy', 'mg'];
+    }
+    
+    if (scriptId.includes('flower')) {
+      return ['kw', 'kg', 'tx', 'wy', 'mg'];
+    }
+    
+    return [];
+  }
+
+  private async handleScriptRequest(sandbox: Sandbox, request: MusicUrlRequest): Promise<MusicUrlResponse> {
+    const { source, action, info } = request;
+    
+    try {
+      const response = await sandbox.request(request);
+      
+      if (response && response.data) {
+        return response;
+      }
+      
+      return {
+        source,
+        action,
+        data: { type: 'music', url: '', lyric: '' } as MusicUrlData | LyricData | PicData,
+      };
+    } catch (error) {
+      throw error;
+    }
   }
 }

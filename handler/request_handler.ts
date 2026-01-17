@@ -20,7 +20,7 @@ export class RequestHandler {
   private engine: ScriptEngine;
   private storage: ScriptStorage;
   private requestQueue: Map<string, [Function, Function]> = new Map();
-  private timeouts: Map<string, number> = new Map();
+  private timeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private readonly REQUEST_TIMEOUT = 60000;
 
   constructor(engine: ScriptEngine, storage: ScriptStorage) {
@@ -31,8 +31,10 @@ export class RequestHandler {
   async handleRequest(requestData: RequestData): Promise<ResponseData> {
     const { requestKey, data } = requestData;
     const { source, action, info } = data;
-
-    console.log(`📨 收到请求: ${action} [${source}] - ${requestKey}`);
+    
+    console.log('[RequestHandler] handleRequest called:', JSON.stringify({ requestKey, source, action, info }, null, 2));
+    
+    await this.storage.ready();
 
     const timeoutKey = requestKey;
     if (this.timeouts.has(timeoutKey)) {
@@ -66,8 +68,6 @@ export class RequestHandler {
       clearTimeout(this.timeouts.get(timeoutKey));
       this.timeouts.delete(timeoutKey);
 
-      console.log(`✅ 请求完成: ${requestKey}`);
-
       return {
         status: true,
         data: {
@@ -79,8 +79,6 @@ export class RequestHandler {
       clearTimeout(this.timeouts.get(timeoutKey));
       this.timeouts.delete(timeoutKey);
 
-      console.error(`❌ 请求失败: ${requestKey} - ${error.message}`);
-
       return {
         status: false,
         message: error.message,
@@ -89,29 +87,43 @@ export class RequestHandler {
   }
 
   private async handleMusicUrl(source: string, info: any): Promise<any> {
+    console.log('[RequestHandler] handleMusicUrl called with source:', source, 'info:', JSON.stringify(info, null, 2));
+    
     const defaultSourceId = this.storage.getDefaultSource();
     let targetSource: string | null = source || defaultSourceId || null;
     let sourceType = source;
+    
+    // 如果没有指定源，使用默认源
+    if (!targetSource && defaultSourceId) {
+      targetSource = defaultSourceId;
+      sourceType = defaultSourceId;
+      
+      // 获取默认源的详细信息
+      const allScripts = this.storage.getLoadedScripts();
+      const defaultScript = allScripts.find(script => script.id === defaultSourceId);
+      
+      if (defaultScript && defaultScript.supportedSources.length > 0) {
+        // 使用默认源支持的第一个音源类型
+        sourceType = defaultScript.supportedSources[0];
+      }
+    }
     
     if (!targetSource) {
       throw new Error(`No available script for source: ${source}`);
     }
 
-    // 如果传入的是音源类型（kg, wy, mg 等），需要找到支持该音源类型的脚本
     if (!(targetSource as string).startsWith('user_api_')) {
       const allScripts = this.storage.getLoadedScripts();
-      const targetScript = allScripts.find(script => 
-        script.supportedSources.includes(targetSource as string)
-      );
+      const targetScript = allScripts.find(script => {
+        return script.supportedSources.includes(targetSource as string);
+      });
       
       if (!targetScript) {
         throw new Error(`No available script for source: ${source}`);
       }
       
       targetSource = targetScript.id;
-      console.log(`🎯 找到支持音源 ${source} 的脚本: ${targetScript.name} (${targetScript.id})`);
     } else {
-      // 如果传入的是脚本 ID，需要找到该脚本支持的音源类型
       const allScripts = this.storage.getLoadedScripts();
       const targetScript = allScripts.find(script => 
         script.id === targetSource
@@ -122,31 +134,46 @@ export class RequestHandler {
       }
       
       sourceType = targetScript.supportedSources[0];
-      console.log(`🎯 找到脚本 ${targetScript.name} (${targetScript.id})，支持的音源: ${sourceType}`);
     }
     
+    const musicInfo = {
+      id: info.id || info.musicInfo?.id || '',
+      name: info.name || info.musicInfo?.name || '未知歌曲',
+      singer: info.singer || info.musicInfo?.singer || '未知歌手',
+      source: info.source || sourceType,
+      interval: info.interval || info.musicInfo?.interval || null,
+      songmid: info.hash || info.songmid || info.musicInfo?.hash || info.musicInfo?.songmid || '',
+      meta: {
+        songId: info.songId || info.musicInfo?.songId || '',
+        albumName: info.albumName || info.musicInfo?.albumName || '',
+        picUrl: info.picUrl || info.musicInfo?.picUrl || null,
+        hash: info.hash || info.songmid || info.musicInfo?.hash || info.musicInfo?.songmid || '',
+        strMediaMid: info.strMediaMid || info.musicInfo?.strMediaMid || undefined,
+        copyrightId: info.copyrightId || info.musicInfo?.copyrightId || undefined
+      }
+    };
+
     const response = await this.engine.getMusicUrl({
       source: sourceType,
       action: 'musicUrl',
-      info,
+      info: {
+        type: info.type || 'music',
+        musicInfo: musicInfo
+      },
     });
     
-    console.log(`🎯 调用 getMusicUrl: sourceType=${sourceType}, source=${source}`);
-    
     if (!response || !response.data) {
-      console.error(`❌ 获取音乐URL失败: source=${sourceType}, songmid=${info?.musicInfo?.songmid || 'unknown'}`);
       throw new Error(`Failed to get music URL: source=${sourceType}`);
     }
 
     const responseData = response.data as MusicUrlData;
     
     if (!responseData.url) {
-      console.error(`❌ 音乐URL为空: source=${sourceType}, songmid=${info?.musicInfo?.songmid || 'unknown'}`);
       throw new Error(`Music URL is empty: source=${sourceType}`);
     }
     
     return {
-      type: info.type,
+      type: info.type || 'music',
       url: responseData.url,
     };
   }
@@ -179,11 +206,12 @@ export class RequestHandler {
       info,
     });
 
-    if (!response) {
+    if (!response || !response.data) {
       throw new Error('Failed to get pic URL');
     }
 
-    return response;
+    const picData = response.data as { url: string };
+    return picData.url;
   }
 
   cancelRequest(requestKey: string): void {
@@ -197,8 +225,6 @@ export class RequestHandler {
       clearTimeout(this.timeouts.get(requestKey));
       this.timeouts.delete(requestKey);
     }
-
-    console.log(`⏹️ 请求已取消: ${requestKey}`);
   }
 
   getActiveRequestCount(): number {

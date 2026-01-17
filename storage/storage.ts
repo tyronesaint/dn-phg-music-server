@@ -37,8 +37,8 @@ export class ScriptStorage {
   private readyPromise: Promise<void>;
 
   constructor() {
-    this.readyPromise = this.loadFromStorage().catch(error => {
-      console.error("❌ 异步加载脚本存储失败:", error);
+    this.readyPromise = this.loadFromStorage().catch((error) => {
+      console.error("加载脚本存储失败:", error);
     });
   }
 
@@ -52,8 +52,7 @@ export class ScriptStorage {
       
       try {
         storedData = await Deno.readTextFile(STORAGE_FILE);
-      } catch (error) {
-        console.log(`📁 存储文件不存在，等待客户端导入脚本`);
+      } catch {
         return;
       }
       
@@ -69,15 +68,9 @@ export class ScriptStorage {
         this.defaultSourceId = data.defaultSourceId || null;
         
         const scriptCount = this.scripts.size;
-        if (scriptCount > 0) {
-          console.log(`📦 从存储加载了 ${scriptCount} 个脚本`);
-          if (this.defaultSourceId) {
-            console.log(`🎯 当前默认音源: ${this.defaultSourceId}`);
-          }
-        }
       }
     } catch (error) {
-      console.error("❌ 加载脚本存储失败:", error);
+      console.error("加载脚本存储失败:", error);
     }
   }
 
@@ -91,9 +84,8 @@ export class ScriptStorage {
       
       const jsonData = JSON.stringify(data, null, 2);
       await Deno.writeTextFile(STORAGE_FILE, jsonData);
-      console.log(`💾 脚本已保存，共 ${items.length} 个`);
     } catch (error) {
-      console.error("❌ 保存脚本存储失败:", error);
+      console.error("保存脚本存储失败:", error);
     }
   }
 
@@ -135,7 +127,9 @@ export class ScriptStorage {
   }
 
   parseScriptInfo(script: string): ScriptInfo {
-    const commentMatch = /^\/\*[\S|\s]+?\*\//.exec(script);
+    const commentMatch = /^\/\*[\s\S]+?\*\//.exec(script);
+    console.log('[Storage] Script first 200 chars:', script.substring(0, 200));
+    console.log('[Storage] Comment match:', commentMatch ? commentMatch[0].substring(0, 100) : 'No match');
     if (!commentMatch) {
       throw new Error("无效的自定义源文件：缺少注释头部");
     }
@@ -213,18 +207,14 @@ export class ScriptStorage {
     await this.saveToStorage();
 
     if (isFirstScript) {
-      console.log(`🎯 第一个脚本，自动设置为默认音源: ${scriptInfo.name}`);
       await this.setDefaultSource(scriptInfo.id);
     }
 
-    console.log(`✅ 脚本导入成功: ${scriptInfo.name} (ID: ${scriptInfo.id})`);
-    console.log(`   支持音源: ${supportedSources.join(', ')}`);
     return scriptInfo;
   }
 
   async importScriptFromUrl(url: string): Promise<ScriptInfo> {
-    console.log(`🌐 从URL导入脚本: ${url}`);
-
+    console.log('[Storage] importScriptFromUrl called with URL:', url);
     if (!/^https?:\/\//.test(url)) {
       throw new Error("无效的URL格式");
     }
@@ -236,6 +226,7 @@ export class ScriptStorage {
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
 
     try {
+      console.log('[Storage] Fetching URL:', url);
       const response = await fetch(url, {
         redirect: 'follow',
         signal: controller.signal,
@@ -253,14 +244,24 @@ export class ScriptStorage {
       }
 
       const script = await response.text();
-
+      console.log('[Storage] Script downloaded, length:', script.length);
+      console.log('[Storage] Script first 100 chars:', script.substring(0, 100));
+      
       if (script.length > MAX_SCRIPT_SIZE) {
         throw new Error(`脚本过大: ${script.length} 字节 (最大 ${MAX_SCRIPT_SIZE} 字节)`);
       }
-
-      return this.importScript(script);
+      
+      const scriptInfo = await this.importScript(script);
+      
+      // 如果是第一个脚本，自动设置为默认
+      if (this.scripts.size === 1) {
+        await this.setDefaultSource(scriptInfo.id);
+      }
+      
+      return scriptInfo;
     } catch (error: any) {
       clearTimeout(timeoutId);
+      console.error('[Storage] importScriptFromUrl error:', error);
       if (error.name === 'AbortError') {
         throw new Error('请求超时');
       }
@@ -269,8 +270,6 @@ export class ScriptStorage {
   }
 
   async importScriptFromFile(fileContent: string, fileName?: string): Promise<ScriptInfo> {
-    console.log(`📁 从文件导入脚本: ${fileName || '未命名'}`);
-
     const script = fileContent.trim();
     if (!script) {
       throw new Error("文件内容为空");
@@ -282,7 +281,6 @@ export class ScriptStorage {
   async updateScript(id: string, script: string): Promise<ScriptInfo | null> {
     const existingItem = this.scripts.get(id);
     if (!existingItem) {
-      console.warn(`⚠️ 脚本不存在: ${id}`);
       return null;
     }
 
@@ -303,7 +301,6 @@ export class ScriptStorage {
     this.scripts.set(id, updatedItem);
     await this.saveToStorage();
 
-    console.log(`🔄 脚本更新成功: ${scriptInfo.name}`);
     return scriptInfo;
   }
 
@@ -393,15 +390,12 @@ export class ScriptStorage {
         const remainingScripts = Array.from(this.scripts.keys());
         if (remainingScripts.length > 0) {
           this.defaultSourceId = remainingScripts[0];
-          console.log(`🎯 默认音源已删除，自动设置新的默认音源: ${this.defaultSourceId}`);
         } else {
           this.defaultSourceId = null;
-          console.log(`🎯 默认音源已删除，没有剩余的音源`);
         }
       }
       
       await this.saveToStorage();
-      console.log(`🗑️ 脚本已删除: ${id}`);
     }
     return deleted;
   }
@@ -418,7 +412,6 @@ export class ScriptStorage {
     }
     if (removed > 0) {
       await this.saveToStorage();
-      console.log(`🗑️ 已删除 ${removed} 个脚本`);
     }
     return removed;
   }
@@ -442,7 +435,6 @@ export class ScriptStorage {
 
   async setDefaultSource(id: string): Promise<boolean> {
     if (!this.scripts.has(id)) {
-      console.warn(`⚠️ 脚本不存在: ${id}`);
       return false;
     }
 
@@ -452,9 +444,6 @@ export class ScriptStorage {
 
     this.defaultSourceId = id;
     await this.saveToStorage();
-
-    const scriptName = this.scripts.get(id)?.name || id;
-    console.log(`🎯 默认音源已设置: ${scriptName} (${id})`);
 
     return true;
   }
@@ -486,7 +475,6 @@ export class ScriptStorage {
       item.isDefault = false;
     }
     this.saveToStorage();
-    console.log("🎯 默认音源已清除");
   }
 
   getScriptCount(): number {
@@ -497,7 +485,6 @@ export class ScriptStorage {
     this.scripts.clear();
     this.defaultSourceId = null;
     this.saveToStorage();
-    console.log("🗑️ 所有脚本已清除");
   }
 
   async exportScript(id: string): Promise<string | null> {
@@ -535,8 +522,11 @@ export class ScriptStorage {
       }
     }
 
-    if (this.defaultSourceId && this.scripts.get(this.defaultSourceId)?.supportedSources.includes(source)) {
-      return this.defaultSourceId;
+    if (this.defaultSourceId) {
+      const defaultItem = this.scripts.get(this.defaultSourceId);
+      if (defaultItem && defaultItem.supportedSources.includes(source)) {
+        return this.defaultSourceId;
+      }
     }
 
     return null;
@@ -545,7 +535,6 @@ export class ScriptStorage {
   async updateScriptSupportedSources(id: string, supportedSources: string[]): Promise<boolean> {
     const item = this.scripts.get(id);
     if (!item) {
-      console.warn(`⚠️ 脚本不存在: ${id}`);
       return false;
     }
 
@@ -553,7 +542,6 @@ export class ScriptStorage {
     item.updatedAt = Date.now();
     await this.saveToStorage();
 
-    console.log(`🔄 脚本音源已更新: ${item.name} (${id}) - ${supportedSources.join(', ')}`);
     return true;
   }
 }

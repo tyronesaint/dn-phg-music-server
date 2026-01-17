@@ -29,8 +29,12 @@ export class Application {
   private async handleConnection(conn: Deno.Conn) {
     const httpConn = Deno.serveHttp(conn);
 
-    for await (const event of httpConn) {
-      await this.handleRequest(event);
+    try {
+      for await (const event of httpConn) {
+        await this.handleRequest(event);
+      }
+    } catch (error) {
+      console.error("连接处理错误:", error);
     }
   }
 
@@ -44,7 +48,16 @@ export class Application {
     };
 
     try {
-      const url = new URL(event.request.url);
+      let url;
+      try {
+        url = new URL(event.request.url);
+      } catch (urlError) {
+        console.error("URL解析错误:", urlError, "Request URL:", event.request.url);
+        ctx.res = new Response("Invalid URL", { status: 400 });
+        await event.respondWith(ctx.res);
+        return;
+      }
+      
       ctx.query = Object.fromEntries(url.searchParams);
 
       const match = this.router.match(event.request.method, url.pathname);

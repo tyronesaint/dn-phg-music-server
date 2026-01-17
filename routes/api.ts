@@ -2,12 +2,14 @@ import { Application } from "../app.ts";
 import { RequestHandler } from "../handler/request_handler.ts";
 import { ScriptStorage } from "../storage/storage.ts";
 import { ScriptEngine } from "../engine/script_engine.ts";
+import { SearchService } from "../services/search_service.ts";
 
 export class APIRoutes {
   private app: Application;
   private handler: RequestHandler;
   private storage: ScriptStorage;
   private engine: ScriptEngine;
+  private searchService: SearchService;
 
   constructor(
     app: Application,
@@ -19,6 +21,7 @@ export class APIRoutes {
     this.handler = handler;
     this.storage = storage;
     this.engine = engine;
+    this.searchService = new SearchService();
 
     this.setupRoutes();
   }
@@ -47,6 +50,8 @@ export class APIRoutes {
     router.post("/api/music/lyric", (ctx) => this.handleGetLyric(ctx));
     router.post("/api/music/pic", (ctx) => this.handleGetPic(ctx));
 
+    router.get("/api/search", (ctx) => this.handleSearch(ctx));
+
     router.post("/api/request", (ctx) => this.handleRequest(ctx));
     router.delete("/api/request/:requestKey", (ctx) => this.handleCancelRequest(ctx));
 
@@ -54,6 +59,8 @@ export class APIRoutes {
     router.post("/api/export/all", () => this.handleExportAllScripts());
 
     router.post("/api/scripts/:id/update-alert", (ctx) => this.handleSetUpdateAlert(ctx));
+
+    router.get("/api/test/music-url", () => this.handleTestMusicUrl());
   }
 
   private async handleIndex(): Promise<Response> {
@@ -205,10 +212,8 @@ export class APIRoutes {
       try {
         const res = await fetch('/api/scripts/loaded');
         const scripts = await res.json();
-        console.log('已加载音源:', scripts);
         alert('已在控制台输出音源列表');
       } catch (e) {
-        console.error('获取音源列表失败:', e);
       }
     }
 
@@ -249,7 +254,6 @@ export class APIRoutes {
           })
         });
         const data = await res.json();
-        console.log('播放URL测试结果:', data);
         alert('已在控制台输出结果');
       } catch (e) {
         alert('测试失败: ' + e.message);
@@ -339,7 +343,13 @@ export class APIRoutes {
         });
       }
 
-      const scriptInfo = await this.storage.importScript(body.script);
+      let scriptInfo;
+      if (/^https?:\/\//.test(body.script)) {
+        scriptInfo = await this.storage.importScriptFromUrl(body.script);
+      } else {
+        scriptInfo = await this.storage.importScript(body.script);
+      }
+      
       const loaded = await this.engine.loadScript(scriptInfo);
 
       return new Response(
@@ -617,7 +627,7 @@ export class APIRoutes {
     try {
       const body = await ctx.req.json();
 
-      const requiredFields = ['source', 'quality', 'name', 'singer'];
+      const requiredFields = ['source', 'quality'];
       for (const field of requiredFields) {
         if (!body[field]) {
           return new Response(
@@ -630,22 +640,15 @@ export class APIRoutes {
         }
       }
 
-      const musicInfo = {
-        id: body.songmid || body.id || '',
-        name: body.name,
-        singer: body.singer,
-        source: body.source,
-        interval: body.interval || null,
-        songmid: body.songmid || body.id || body.songId || '',
-        meta: {
-          songId: body.songmid || body.id || body.songId || '',
-          albumName: body.albumName || '',
-          picUrl: body.picUrl || null,
-          hash: body.hash,
-          strMediaMid: body.strMediaMid,
-          copyrightId: body.copyrightId,
-        },
-      };
+      const songId = body.songmid || body.id || body.songId || body.musicInfo?.id || body.musicInfo?.songmid || body.musicInfo?.hash || '';
+      const name = body.name || body.musicInfo?.name || '未知歌曲';
+      const singer = body.singer || body.musicInfo?.singer || '未知歌手';
+      const interval = body.interval || body.musicInfo?.interval || null;
+      const hash = body.hash || body.musicInfo?.hash || body.musicInfo?.songmid || '';
+      const albumName = body.albumName || body.musicInfo?.albumName || body.musicInfo?.album || '';
+      const picUrl = body.picUrl || body.musicInfo?.picUrl || null;
+      const strMediaMid = body.strMediaMid || body.musicInfo?.strMediaMid;
+      const copyrightId = body.copyrightId || body.musicInfo?.copyrightId;
 
       const requestKey = `music_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
@@ -656,7 +659,28 @@ export class APIRoutes {
           action: 'musicUrl',
           info: {
             type: body.quality,
-            musicInfo,
+            id: songId,
+            songId: songId,
+            name: name,
+            singer: singer,
+            interval: interval,
+            hash: hash,
+            musicInfo: {
+              id: songId,
+              name: name,
+              singer: singer,
+              source: body.source,
+              interval: interval,
+              songmid: songId,
+              meta: {
+                songId: songId,
+                albumName: albumName,
+                picUrl: picUrl,
+                hash: hash,
+                strMediaMid: strMediaMid,
+                copyrightId: copyrightId,
+              },
+            },
           },
         },
       });
@@ -676,6 +700,39 @@ export class APIRoutes {
               headers: { "Content-Type": "application/json" },
             }
           );
+        }
+      }
+
+      // 备选方案：如果脚本返回失败，尝试直接从 API 获取 URL
+      if (body.musicInfo?.id) {
+        try {
+          console.log('[API] 脚本返回失败，尝试直接从 API 获取 URL');
+          const source = body.source || 'kw';
+          const apiUrl = `https://lxmusicapi.onrender.com/url/${source}/${body.musicInfo.id}/${body.quality}`;
+          const apiResponse = await fetch(apiUrl, {
+            headers: { "X-Request-Key": "share-v2" }
+          });
+          
+          if (apiResponse.ok) {
+            const apiData = await apiResponse.json();
+            if (apiData.url) {
+              console.log('[API] 直接从 API 获取成功:', apiData.url);
+              return new Response(
+                JSON.stringify({
+                  success: true,
+                  url: apiData.url,
+                  type: body.quality,
+                  source: body.source,
+                  quality: body.quality,
+                }),
+                {
+                  headers: { "Content-Type": "application/json" },
+                }
+              );
+            }
+          }
+        } catch (apiError) {
+          console.error('[API] 直接从 API 获取失败:', apiError);
         }
       }
 
@@ -824,6 +881,49 @@ export class APIRoutes {
     }
   }
 
+  private async handleSearch(ctx: any): Promise<Response> {
+    try {
+      const url = new URL(ctx.req.url, `http://${ctx.req.headers.get('host')}`);
+      const keyword = url.searchParams.get('keyword');
+      const source = url.searchParams.get('source') || undefined;
+      const page = parseInt(url.searchParams.get('page') || '1');
+      const limit = parseInt(url.searchParams.get('limit') || '20');
+
+      if (!keyword) {
+        return new Response(
+          JSON.stringify({ error: "缺少必要参数: keyword" }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      const results = await this.searchService.search(keyword, source, page, limit);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          keyword,
+          page,
+          limit,
+          results,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    } catch (error: any) {
+      return new Response(
+        JSON.stringify({ error: error.message }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+  }
+
   private async handleRequest(ctx: any): Promise<Response> {
     try {
       const body = await ctx.req.json();
@@ -924,7 +1024,7 @@ export class APIRoutes {
       const body = await ctx.req.json();
       const enabled = body.enabled ?? true;
 
-      const success = this.storage.setAllowShowUpdateAlert(id, enabled);
+      const success = await this.storage.setAllowShowUpdateAlert(id, enabled);
 
       return new Response(
         JSON.stringify({
@@ -937,6 +1037,72 @@ export class APIRoutes {
       );
     } catch (error: any) {
       return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  private async handleTestMusicUrl(): Promise<Response> {
+    try {
+      await this.storage.ready();
+
+      const allScripts = this.storage.getLoadedScripts();
+      const kwScript = allScripts.find(script =>
+        script.supportedSources.includes("kw")
+      );
+
+      if (!kwScript) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "No script found for kw",
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      const musicInfo = {
+        id: "12442905",
+        name: "测试歌曲",
+        singer: "测试歌手",
+        source: "kw",
+        interval: null,
+        songmid: "12442905",
+        meta: {
+          songId: "12442905",
+          albumName: "",
+          picUrl: null,
+        },
+      };
+
+      const result = await this.handler.handleRequest({
+        requestKey: `test_${Date.now()}`,
+        data: {
+          source: "kw",
+          action: "musicUrl",
+          info: {
+            type: "128k",
+            musicInfo,
+          },
+        },
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          scripts: allScripts,
+          kwScriptFound: !!kwScript,
+          result,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    } catch (error: any) {
+      return new Response(JSON.stringify({ error: error.message, stack: error.stack }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });

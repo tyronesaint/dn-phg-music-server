@@ -27,7 +27,49 @@ const API_CONFIG = {
   oldServers: ['tempmusics.tk', 'tempmusic.xyz', 'tempmusic.top', 'api.lxmusic.ml', 'api.lxmusic.xyz'],
   newServer: 'https://lxmusicapi.onrender.com',
   requestKey: 'share-v2',
+  bHh: '624868746c',
+  appVersion: '2.10.0',
 };
+
+async function handleDeflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  const compressionStream = new CompressionStream('deflate-raw');
+  const writer = compressionStream.writable.getWriter();
+  await writer.write(data as any);
+  await writer.close();
+  const compressedData = await new Response(compressionStream.readable).arrayBuffer();
+  return new Uint8Array(compressedData);
+}
+
+async function generateAuthHeader(url: string, headers: Record<string, string>): Promise<void> {
+  try {
+    if (!headers[API_CONFIG.bHh]) {
+      return;
+    }
+
+    const path = url.replace(/^https?:\/\/[\w.:]+\//, '/');
+
+    let s = atob(API_CONFIG.bHh);
+    s = s.replace(s.slice(-1), '');
+    s = atob(s);
+
+    const v = API_CONFIG.appVersion.split('-')[0].split('.').map(n => n.length < 3 ? n.padStart(3, '0') : n).join('');
+    const v2 = API_CONFIG.appVersion.split('-')[1] || '';
+
+    const regx = /(?:\d\w)+/g;
+    const match = `${path}${v}`.match(regx);
+
+    if (match && match[0]) {
+      const dataToCompress = JSON.stringify([match[0], null, 1].concat(v));
+      const compressedData = await handleDeflateRaw(new TextEncoder().encode(dataToCompress));
+      const base64Data = btoa(String.fromCharCode(...compressedData));
+      const hexData = base64Data.split('').map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+
+      headers[s] = !s ? '' : `${hexData}&${parseInt(v)}${v2}`;
+      delete headers[API_CONFIG.bHh];
+    }
+  } catch (error) {
+  }
+}
 
 export class RequestManager {
   private activeRequests: Map<string, AbortController> = new Map();
@@ -39,17 +81,6 @@ export class RequestManager {
 
   addRequest(options: RequestOptions, callback?: RequestCallback): void {
     const requestKey = this.generateRequestKey(options);
-    
-    console.log(`🔍 RequestManager.addRequest 被调用 [${requestKey}]:`, {
-      url: options.url,
-      method: options.method,
-      headers: options.headers,
-      hasBody: !!options.body,
-      hasForm: !!options.form,
-      hasFormData: !!options.formData,
-      timeout: options.timeout,
-    });
-    
     const controller = new AbortController();
 
     this.activeRequests.set(requestKey, controller);
@@ -61,14 +92,14 @@ export class RequestManager {
     options: RequestOptions,
     signal: AbortSignal,
     callback?: RequestCallback,
-    requestKey?: string,
-    retryCount: number = 0
+    requestKey?: string
   ): Promise<void> {
     const startTime = Date.now();
 
     try {
       let requestBody: string | FormData | undefined;
       let contentType: string | undefined;
+      let useJsonEncoding = true;
 
       if (options.body) {
         requestBody = typeof options.body === 'string'
@@ -78,12 +109,14 @@ export class RequestManager {
       } else if (options.form) {
         requestBody = new URLSearchParams(options.form).toString();
         contentType = 'application/x-www-form-urlencoded';
+        useJsonEncoding = false;
       } else if (options.formData) {
         const form = new FormData();
         for (const [key, value] of Object.entries(options.formData)) {
           form.append(key, value);
         }
         requestBody = form;
+        useJsonEncoding = false;
       }
 
       const headers: Record<string, string> = {
@@ -99,8 +132,9 @@ export class RequestManager {
 
       if (this.shouldAddApiKey(options.url)) {
         headers['X-Request-Key'] = API_CONFIG.requestKey;
-        console.log(`🔑 为 API 请求添加认证头: X-Request-Key`);
       }
+
+      await generateAuthHeader(options.url, headers);
 
       if (this.proxyConfig.host && !this.isLocalUrl(options.url)) {
         const proxyUrl = `http://${this.proxyConfig.host}:${this.proxyConfig.port}`;
@@ -123,12 +157,13 @@ export class RequestManager {
 
       const rawUint8Array = new Uint8Array(responseBody);
       const rawString = new TextDecoder().decode(responseBody);
-      let parsedBody: any = rawString;
+      
+      let body: any = rawString;
 
       try {
-        parsedBody = JSON.parse(rawString);
+        body = JSON.parse(rawString);
       } catch (e) {
-        parsedBody = rawString;
+        body = rawString;
       }
 
       const resp: Response = {
@@ -137,52 +172,18 @@ export class RequestManager {
         headers: Object.fromEntries(response.headers.entries()),
         bytes,
         raw: rawUint8Array,
-        body: parsedBody,
+        body: body,
       };
 
-      const duration = Date.now() - startTime;
-      console.log(`🌐 请求完成 [${requestKey}]: ${options.method} ${options.url} [${response.status}] ${duration}ms`);
-      console.log(`🔍 响应数据 [${requestKey}]:`, {
-        statusCode: response.status,
-        statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        bodyLength: bytes,
-        bodyType: typeof parsedBody,
-        bodyPreview: typeof parsedBody === 'string' ? parsedBody.substring(0, 100) : JSON.stringify(parsedBody).substring(0, 100),
-      });
-      console.log(`🔍 原始响应字符串长度 [${requestKey}]: ${rawString.length}`);
-      console.log(`🔍 原始响应字符串前200字符 [${requestKey}]: ${rawString.substring(0, 200)}`);
-
       if (callback) {
-        console.log(`🔍 调用回调函数 [${requestKey}]`);
-        console.log(`🔍 回调函数参数:`, {
-          error: null,
-          response: {
-            statusCode: resp.statusCode,
-            statusMessage: resp.statusMessage,
-            headers: resp.headers,
-            bytes: resp.bytes,
-            rawLength: resp.raw.length,
-            bodyType: typeof parsedBody,
-            bodyValue: parsedBody,
-          },
-          body: parsedBody,
-        });
-        
         try {
-          callback(null, resp, parsedBody);
-          console.log(`🔍 回调函数执行完成 [${requestKey}]`);
+          callback(null, resp, body);
         } catch (callbackError: any) {
-          console.error(`❌ 回调函数执行出错 [${requestKey}]:`, callbackError);
-          console.error(`❌ 回调函数错误堆栈 [${requestKey}]:`, callbackError.stack);
           throw callbackError;
         }
-      } else {
-        console.log(`🔍 没有回调函数 [${requestKey}]`);
       }
     } catch (error: any) {
       if (error.name === 'AbortError') {
-        console.log(`⏹️ 请求已取消 [${requestKey}]: ${options.url}`);
         if (callback) {
           const errorResponse: Response = {
             statusCode: 0,
@@ -195,28 +196,16 @@ export class RequestManager {
           callback(new Error('Request cancelled'), errorResponse, null);
         }
       } else {
-        console.error(`❌ 请求失败 [${requestKey}]: ${options.url}`, error.message);
-        console.error(`❌ 错误详情 [${requestKey}]:`, error);
-        console.error(`❌ 错误堆栈 [${requestKey}]:`, error.stack);
-        
-        const mirrorUrl = this.getMirrorUrl(options.url);
-        if (mirrorUrl && retryCount === 0) {
-          console.log(`🔄 尝试使用镜像URL重试: ${mirrorUrl}`);
-          const mirroredOptions = { ...options, url: mirrorUrl };
-          await this.executeRequest(mirroredOptions, signal, callback, requestKey, retryCount + 1);
-        } else {
-          if (callback) {
-            const errorResponse: Response = {
-              statusCode: 0,
-              statusMessage: error.message || 'Request failed',
-              headers: {},
-              bytes: 0,
-              raw: new Uint8Array(0),
-              body: null,
-            };
-            console.log(`🔍 调用错误回调函数 [${requestKey}]`);
-            callback(error, errorResponse, null);
-          }
+        if (callback) {
+          const errorResponse: Response = {
+            statusCode: 0,
+            statusMessage: error.message || 'Request failed',
+            headers: {},
+            bytes: 0,
+            raw: new Uint8Array(0),
+            body: null,
+          };
+          callback(error, errorResponse, null);
         }
       }
     }
@@ -227,7 +216,6 @@ export class RequestManager {
       if (key.includes(url)) {
         controller.abort();
         this.activeRequests.delete(key);
-        console.log(`⏹️ 请求已取消: ${key}`);
       }
     }
   }
@@ -243,7 +231,6 @@ export class RequestManager {
       if (urlObj.hostname === 'registry.npmjs.org') {
         const mirrorUrl = new URL(url);
         mirrorUrl.hostname = 'registry.npmmirror.com';
-        console.log(`🔄 检测到 npm registry，使用镜像: ${mirrorUrl.toString()}`);
         return mirrorUrl.toString();
       }
       
@@ -252,9 +239,16 @@ export class RequestManager {
           const pathParts = urlObj.pathname.split('/').filter(p => p);
           if (pathParts.length >= 3) {
             const newUrl = new URL(`${API_CONFIG.newServer}/${pathParts.slice(1).join('/')}`);
-            console.log(`🔄 检测到旧API服务器 (${urlObj.hostname})，重定向到新API服务器: ${newUrl.toString()}`);
             return newUrl.toString();
           }
+        }
+      }
+
+      if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(urlObj.hostname)) {
+        const pathParts = urlObj.pathname.split('/').filter(p => p);
+        if (pathParts.length >= 3 && urlObj.pathname.includes('/flower/')) {
+          const newUrl = new URL(`${API_CONFIG.newServer}/${pathParts.slice(1).join('/')}`);
+          return newUrl.toString();
         }
       }
       
