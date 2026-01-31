@@ -718,7 +718,12 @@ export class APIRoutes {
       };
       console.log('[API] 调用 handler.handleRequest, 参数:', JSON.stringify(requestData, null, 2));
 
-      const result = await this.handler.handleRequest(requestData);
+      // 并行获取音乐URL和歌词
+      const [result, lyricResult] = await Promise.all([
+        this.handler.handleRequest(requestData),
+        this.getLyricForMusicUrl(body, songId, name, singer, hash, copyrightId)
+      ]);
+      
       console.log('[API] handler.handleRequest 返回:', JSON.stringify(result, null, 2));
 
       if (result.status && result.data && result.data.result) {
@@ -730,6 +735,10 @@ export class APIRoutes {
             type: musicUrlData.type,
             source: body.source,
             quality: body.quality,
+            lyric: lyricResult.lyric || '',
+            tlyric: lyricResult.tlyric || '',
+            rlyric: lyricResult.rlyric || '',
+            lxlyric: lyricResult.lxlyric || '',
           };
           console.log('[API] 最终响应:', JSON.stringify(responseData, null, 2));
           console.log('========== [API] handleGetMusicUrl 结束 ==========\n');
@@ -747,6 +756,55 @@ export class APIRoutes {
       console.error('[API] 异常堆栈:', error.stack);
       console.log('========== [API] handleGetMusicUrl 结束 ==========\n');
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message));
+    }
+  }
+
+  // 辅助方法：为音乐URL接口获取歌词
+  private async getLyricForMusicUrl(body: any, songId: string, name: string, singer: string, hash: string, copyrightId?: string): Promise<{lyric: string; tlyric?: string; rlyric?: string; lxlyric?: string}> {
+    try {
+      const source = body.musicInfo?.source || body.source || 'unknown';
+      
+      // 根据音源映射参数
+      let musicInfo: any = { source };
+
+      switch (source) {
+        case 'kw':
+          musicInfo.songmid = songId;
+          break;
+        case 'kg':
+          musicInfo.hash = hash || songId;
+          musicInfo.name = name || '未知歌曲';
+          break;
+        case 'tx':
+          musicInfo.songId = songId;
+          break;
+        case 'wy':
+          musicInfo.songId = songId;
+          break;
+        case 'mg':
+          musicInfo.copyrightId = copyrightId || songId;
+          musicInfo.name = name;
+          musicInfo.singer = singer;
+          break;
+        default:
+          console.log('[API] 不支持的音源用于歌词获取:', source);
+          return { lyric: '' };
+      }
+
+      console.log('[API] 获取歌词, musicInfo:', JSON.stringify(musicInfo, null, 2));
+      
+      const lyricResult = await this.lyricService.getLyric(musicInfo);
+      
+      console.log('[API] 歌词获取成功, 长度:', lyricResult.lyric?.length || 0);
+      return {
+        lyric: lyricResult.lyric || '',
+        tlyric: lyricResult.tlyric || '',
+        rlyric: lyricResult.rlyric || '',
+        lxlyric: lyricResult.lxlyric || '',
+      };
+    } catch (error: any) {
+      console.error('[API] 获取歌词失败:', error.message);
+      return { lyric: '' };
     }
   }
 
