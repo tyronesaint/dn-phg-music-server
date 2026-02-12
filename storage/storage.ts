@@ -24,6 +24,7 @@ interface StorageData {
 
 const STORAGE_KEY = "dn_music_scripts";
 const STORAGE_FILE = "./data/scripts.json";
+const CACHE_FILE = "./data/music_url_cache.json";
 
 const DEFAULT_SCRIPT_INFO: Partial<ScriptInfo> = {
   name: "",
@@ -53,7 +54,6 @@ export class ScriptStorage {
   }
 
   private async initKv(): Promise<Deno.Kv | null> {
-    if (!isDenoDeploy) return null;
     try {
       return await Deno.openKv();
     } catch (error) {
@@ -64,9 +64,16 @@ export class ScriptStorage {
 
   private async loadFromStorage(): Promise<void> {
     try {
-      // Deno Deploy 环境使用 KV
+      // 初始化 KV（用于缓存功能）
+      this.kv = await this.initKv();
+      if (this.kv) {
+        console.log("[Storage] KV initialized successfully");
+      } else {
+        console.log("[Storage] KV not available, caching will be disabled");
+      }
+
+      // Deno Deploy 环境使用 KV 存储脚本
       if (isDenoDeploy) {
-        this.kv = await this.initKv();
         if (this.kv) {
           const result = await this.kv.get<StorageData>([STORAGE_KEY]);
           if (result.value) {
@@ -426,12 +433,28 @@ export class ScriptStorage {
     return result;
   }
 
-  getLoadedScripts(): Array<{ id: string; name: string; supportedSources: string[]; isDefault: boolean }> {
-    const result: Array<{ id: string; name: string; supportedSources: string[]; isDefault: boolean }> = [];
+  private formatDate(timestamp: number): string {
+    const date = new Date(timestamp);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  getLoadedScripts(): Array<{ id: string; name: string; description: string; author: string; homepage: string; version: string; createdAt: string; supportedSources: string[]; isDefault: boolean }> {
+    const result: Array<{ id: string; name: string; description: string; author: string; homepage: string; version: string; createdAt: string; supportedSources: string[]; isDefault: boolean }> = [];
     for (const item of this.scripts.values()) {
       result.push({
         id: item.id,
         name: item.name,
+        description: item.description,
+        author: item.author,
+        homepage: item.homepage,
+        version: item.version,
+        createdAt: this.formatDate(item.createdAt),
         supportedSources: item.supportedSources,
         isDefault: item.id === this.defaultSourceId,
       });
@@ -582,7 +605,7 @@ export class ScriptStorage {
 
     if (this.defaultSourceId) {
       const defaultItem = this.scripts.get(this.defaultSourceId);
-      if (defaultItem && defaultItem.supportedSources.includes(source)) {
+      if (defaultItem?.supportedSources.includes(source)) {
         return this.defaultSourceId;
       }
     }
@@ -602,4 +625,157 @@ export class ScriptStorage {
 
     return true;
   }
+
+  private static MUSIC_URL_CACHE_KEY = ["music_url_cache"];
+  private static CACHE_ENABLED_KEY = ["cache_enabled"];
+
+  private musicUrlCacheEnabled: boolean | null = null;
+
+  async isMusicUrlCacheEnabled(): Promise<boolean> {
+    if (this.musicUrlCacheEnabled !== null) {
+      return this.musicUrlCacheEnabled ?? false;
+    }
+
+    if (this.kv) {
+      const result = await this.kv.get<{ enabled: boolean }>(ScriptStorage.CACHE_ENABLED_KEY);
+      if (result.value) {
+        this.musicUrlCacheEnabled = result.value.enabled;
+      } else {
+        this.musicUrlCacheEnabled = false;
+        await this.setMusicUrlCacheEnabled(false);
+      }
+    } else {
+      this.musicUrlCacheEnabled = false;
+    }
+
+    return this.musicUrlCacheEnabled;
+  }
+
+  async setMusicUrlCacheEnabled(enabled: boolean): Promise<void> {
+    this.musicUrlCacheEnabled = enabled;
+
+    if (this.kv) {
+      await this.kv.set(ScriptStorage.CACHE_ENABLED_KEY, { enabled, updatedAt: Date.now() });
+    }
+  }
+
+  async setMusicUrlCache(source: string, songId: string, url: string, quality: string): Promise<void> {
+    const cacheKey = `${source}_${songId}_${quality}`;
+    const cacheEntry: MusicUrlCacheEntry = {
+      url,
+      cachedAt: Date.now(),
+      source,
+      songId,
+      quality,
+    };
+
+    if (this.kv) {
+      console.log(`[Storage] Setting cache in KV for key: ${cacheKey}`);
+      await this.kv.set([...ScriptStorage.MUSIC_URL_CACHE_KEY, source, songId, quality], cacheEntry);
+      console.log(`[Storage] Cache set successfully in KV for key: ${cacheKey}`);
+    } else {
+      console.log(`[Storage] Setting cache in file for key: ${cacheKey}`);
+      try {
+        let cacheData: Record<string, MusicUrlCacheEntry> = {};
+        try {
+          const data = await Deno.readTextFile(CACHE_FILE);
+          cacheData = JSON.parse(data);
+        } catch {
+        }
+        cacheData[cacheKey] = cacheEntry;
+        await Deno.writeTextFile(CACHE_FILE, JSON.stringify(cacheData, null, 2));
+        console.log(`[Storage] Cache set successfully in file for key: ${cacheKey}`);
+      } catch (error) {
+        console.error(`[Storage] Failed to set cache in file: ${error}`);
+      }
+    }
+  }
+
+  async getMusicUrlCache(source: string, songId: string, quality: string): Promise<MusicUrlCacheEntry | null> {
+    const cacheKey = `${source}_${songId}_${quality}`;
+
+    if (this.kv) {
+      console.log(`[Storage] Getting cache from KV for key: ${cacheKey}`);
+      const result = await this.kv.get<MusicUrlCacheEntry>([...ScriptStorage.MUSIC_URL_CACHE_KEY, source, songId, quality]);
+
+      if (result.value) {
+        const cacheEntry = result.value as MusicUrlCacheEntry;
+        console.log(`[Storage] Cache hit in KV for ${source}/${songId}/${quality}: ${cacheEntry.url?.substring(0, 80)}...`);
+        return cacheEntry;
+      }
+
+      console.log(`[Storage] Cache miss in KV for ${source}/${songId}/${quality}`);
+      return null;
+    } else {
+      console.log(`[Storage] Getting cache from file for key: ${cacheKey}`);
+      try {
+        const data = await Deno.readTextFile(CACHE_FILE);
+        const cacheData: Record<string, MusicUrlCacheEntry> = JSON.parse(data);
+        const cacheEntry = cacheData[cacheKey];
+
+        if (cacheEntry) {
+          console.log(`[Storage] Cache hit in file for ${source}/${songId}/${quality}: ${cacheEntry.url?.substring(0, 80)}...`);
+          return cacheEntry;
+        }
+
+        console.log(`[Storage] Cache miss in file for ${source}/${songId}/${quality}`);
+        return null;
+      } catch (error) {
+        console.log(`[Storage] Failed to read cache from file: ${error}`);
+        return null;
+      }
+    }
+  }
+
+  async clearMusicUrlCache(): Promise<void> {
+    if (this.kv) {
+      const iterator = this.kv.list<MusicUrlCacheEntry>({ prefix: ScriptStorage.MUSIC_URL_CACHE_KEY });
+      const keysToDelete: Deno.KvKey[] = [];
+
+      for await (const res of iterator) {
+        keysToDelete.push(res.key);
+      }
+
+      if (keysToDelete.length > 0) {
+        await this.kv.deleteMany(keysToDelete);
+        console.log(`[Storage] Cleared ${keysToDelete.length} cached music URLs from KV`);
+      }
+    } else {
+      try {
+        await Deno.writeTextFile(CACHE_FILE, "{}");
+        console.log("[Storage] Cleared all cached music URLs from file");
+      } catch (error) {
+        console.error(`[Storage] Failed to clear cache from file: ${error}`);
+      }
+    }
+  }
+
+  async getMusicUrlCacheCount(): Promise<number> {
+    if (this.kv) {
+      let count = 0;
+      const iterator = this.kv.list<MusicUrlCacheEntry>({ prefix: ScriptStorage.MUSIC_URL_CACHE_KEY });
+
+      for await (const _res of iterator) {
+        count++;
+      }
+
+      return count;
+    } else {
+      try {
+        const data = await Deno.readTextFile(CACHE_FILE);
+        const cacheData: Record<string, MusicUrlCacheEntry> = JSON.parse(data);
+        return Object.keys(cacheData).length;
+      } catch {
+        return 0;
+      }
+    }
+  }
+}
+
+interface MusicUrlCacheEntry {
+  url: string;
+  cachedAt: number;
+  source: string;
+  songId: string;
+  quality: string;
 }

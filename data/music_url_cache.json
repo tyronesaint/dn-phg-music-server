@@ -1,0 +1,30 @@
+{
+  "tx_349884_128k": {
+    "url": "http://rc.sycdn.kuwo.cn/2b6d5d1c53f33ca093258e4263a7ceb3/69841b1a/resource/n1/90/34/2348658928.mp3",
+    "cachedAt": 1770265371175,
+    "source": "tx",
+    "songId": "349884",
+    "quality": "128k"
+  },
+  "tx_001Wdver42XQpX_128k": {
+    "url": "http://ws.stream.qqmusic.qq.com/M500001T5sEj19MXkW.mp3?fromtag=4&guid=api.vkeys.cn&trace=6781d3d1e0134676&uin=3232283746&vkey=2C547CCFFB89EB0EEBF367C8A2B196513C177B583169B2FFF858234C5C2714899EE7A416DF67347B06053F2B5C6B8D6CC1C91F99368051CD__v2b9ab7be",
+    "cachedAt": 1770265709899,
+    "source": "tx",
+    "songId": "001Wdver42XQpX",
+    "quality": "128k"
+  },
+  "tx_000IwJah2H0f2E_128k": {
+    "url": "http://ws.stream.qqmusic.qq.com/M5000031z0c71BPyNX.mp3?fromtag=4&guid=api.vkeys.cn&src=M500001xE7wG3iI3TF.mp3&trace=6d5db336f75c927f&uin=3232283746&vkey=BD7BEB3C8FB7E960CFB60395FEE68D9A9E64353851D5B5822B94E366E52CBA1759722346B2F1E4EA72C34BCF8E7A6E4780F9492C8BEA4ABD__v2b9aac83",
+    "cachedAt": 1770282402181,
+    "source": "tx",
+    "songId": "000IwJah2H0f2E",
+    "quality": "128k"
+  },
+  "tx_004VZlcd2xCuER_128k": {
+    "url": "http://ws.stream.qqmusic.qq.com/M500002iw0K4340Z6i.mp3?fromtag=4&guid=api.vkeys.cn&src=M500003efCMl37opPp.mp3&trace=2a0944ea921001f5&uin=3232283746&vkey=F7AF79B1A31F44DB9C1560F2580E98D465C4B82D17F9B97DB80E7B7903EAD2DA366CF9641BB2A5161C8DF8383CC269969A38941E26EC8ECC__v2b94c332",
+    "cachedAt": 1770282610597,
+    "source": "tx",
+    "songId": "004VZlcd2xCuER",
+    "quality": "128k"
+  }
+}

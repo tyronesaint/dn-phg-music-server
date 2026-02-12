@@ -4,6 +4,8 @@ import { ScriptStorage } from "../storage/storage.ts";
 import { ScriptEngine } from "../engine/script_engine.ts";
 import { SearchService } from "../services/search_service.ts";
 import { LyricService } from "../services/lyric_service.ts";
+import { SongListService } from "../services/songlist_service.ts";
+import { ShortLinkService } from "../services/shortlink_service.ts";
 
 interface ApiResponse<T = any> {
   code: number;
@@ -79,6 +81,8 @@ export class APIRoutes {
   private engine: ScriptEngine;
   private searchService: SearchService;
   private lyricService: LyricService;
+  private songListService: SongListService;
+  private shortLinkService: ShortLinkService;
 
   constructor(
     app: Application,
@@ -92,6 +96,8 @@ export class APIRoutes {
     this.engine = engine;
     this.searchService = new SearchService();
     this.lyricService = new LyricService();
+    this.songListService = new SongListService();
+    this.shortLinkService = new ShortLinkService();
 
     this.setupRoutes();
   }
@@ -115,6 +121,10 @@ export class APIRoutes {
 
     router.post("/api/scripts/default", (ctx) => this.handleSetDefaultSource(ctx));
     router.get("/api/scripts/default", (ctx) => this.handleGetDefaultSource(ctx));
+
+    router.post("/api/cache/music-url/enable", (ctx) => this.handleSetMusicUrlCacheEnabled(ctx));
+    router.get("/api/cache/music-url/status", (ctx) => this.handleGetMusicUrlCacheStatus(ctx));
+    router.post("/api/cache/music-url/clear", (ctx) => this.handleClearMusicUrlCache(ctx));
 
     router.post("/api/music/url", async (ctx) => {
       console.log('\n========== [API] 收到 /api/music/url 请求 ==========');
@@ -207,6 +217,42 @@ export class APIRoutes {
         console.error('[API] /api/music/lyric/direct 抛出异常:', error.message);
         console.error('[API] 异常堆栈:', error.stack);
         console.log('========== [API] /api/music/lyric/direct 请求异常结束 ==========\n');
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "Internal Server Error"), 500);
+      }
+    });
+
+    // 歌单详情接口
+    router.post("/api/songlist/detail", async (ctx) => {
+      console.log('\n========== [API] 收到 /api/songlist/detail 请求 ==========');
+      const startTime = Date.now();
+      try {
+        const response = await this.handleGetSongListDetail(ctx);
+        const duration = Date.now() - startTime;
+        console.log('[API] /api/songlist/detail 调用完成，耗时:', duration, 'ms');
+        console.log('========== [API] /api/songlist/detail 请求结束 ==========\n');
+        return response;
+      } catch (error: any) {
+        console.error('[API] /api/songlist/detail 抛出异常:', error.message);
+        console.error('[API] 异常堆栈:', error.stack);
+        console.log('========== [API] /api/songlist/detail 请求异常结束 ==========\n');
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "Internal Server Error"), 500);
+      }
+    });
+
+    // 短链接歌单详情接口
+    router.post("/api/songlist/detail/by-link", async (ctx) => {
+      console.log('\n========== [API] 收到 /api/songlist/detail/by-link 请求 ==========');
+      const startTime = Date.now();
+      try {
+        const response = await this.handleGetSongListDetailByLink(ctx);
+        const duration = Date.now() - startTime;
+        console.log('[API] /api/songlist/detail/by-link 调用完成，耗时:', duration, 'ms');
+        console.log('========== [API] /api/songlist/detail/by-link 请求结束 ==========\n');
+        return response;
+      } catch (error: any) {
+        console.error('[API] /api/songlist/detail/by-link 抛出异常:', error.message);
+        console.error('[API] 异常堆栈:', error.stack);
+        console.log('========== [API] /api/songlist/detail/by-link 请求异常结束 ==========\n');
         return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "Internal Server Error"), 500);
       }
     });
@@ -501,9 +547,17 @@ export class APIRoutes {
       const scriptInfo = await this.storage.importScriptFromUrl(body.url);
       const loaded = await this.engine.loadScript(scriptInfo);
 
-      return ApiResponseBuilder.toResponse(ApiResponseBuilder.created({
-        apiInfo: scriptInfo,
-        loaded,
+      const loadedScripts = this.storage.getLoadedScripts();
+      const defaultInfo = this.storage.getDefaultSourceInfo();
+
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        success: loaded,
+        defaultSource: {
+          id: defaultInfo?.id || null,
+          name: defaultInfo?.name || null,
+          supportedSources: defaultInfo?.supportedSources || [],
+        },
+        scripts: loadedScripts,
       }, "从URL导入成功"));
     } catch (error: any) {
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
@@ -578,8 +632,17 @@ export class APIRoutes {
         await this.engine.unloadScript(id);
       }
 
+      const loadedScripts = this.storage.getLoadedScripts();
+      const defaultInfo = this.storage.getDefaultSourceInfo();
+
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
-        removed,
+        success: removed,
+        defaultSource: {
+          id: defaultInfo?.id || null,
+          name: defaultInfo?.name || null,
+          supportedSources: defaultInfo?.supportedSources || [],
+        },
+        scripts: loadedScripts,
       }, removed ? "脚本已删除" : "脚本不存在"));
     } catch (error: any) {
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
@@ -629,9 +692,18 @@ export class APIRoutes {
         await this.engine.loadScript(scriptInfo);
       }
 
+      const loadedScripts = this.storage.getLoadedScripts();
+      const defaultInfo = this.storage.getDefaultSourceInfo();
+      
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
-        defaultSource: scriptInfo?.name || id,
-      }, success ? `默认音源已设置为: ${scriptInfo?.name || id}` : "脚本不存在"));
+        success: success,
+        defaultSource: {
+          id: defaultInfo?.id || null,
+          name: defaultInfo?.name || null,
+          supportedSources: defaultInfo?.supportedSources || [],
+        },
+        scripts: loadedScripts,
+      }, success ? `默认音源已设置为: ${scriptInfo?.name || id}` : "设置失败"));
     } catch (error: any) {
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
     }
@@ -640,11 +712,59 @@ export class APIRoutes {
   private async handleGetDefaultSource(_ctx: any): Promise<Response> {
     try {
       const defaultInfo = this.storage.getDefaultSourceInfo();
+      const loadedScripts = this.storage.getLoadedScripts();
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
-        id: defaultInfo?.id || null,
-        name: defaultInfo?.name || null,
-        supportedSources: defaultInfo?.supportedSources || [],
+        defaultSource: {
+          id: defaultInfo?.id || null,
+          name: defaultInfo?.name || null,
+          supportedSources: defaultInfo?.supportedSources || [],
+        },
+        scripts: loadedScripts,
       }));
+    } catch (error: any) {
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
+    }
+  }
+
+  private async handleSetMusicUrlCacheEnabled(ctx: any): Promise<Response> {
+    try {
+      const body = await ctx.req.json();
+      const enabled = body.enabled === 1 || body.enabled === true;
+
+      await this.storage.setMusicUrlCacheEnabled(enabled);
+      const isEnabled = await this.storage.isMusicUrlCacheEnabled();
+      const cacheCount = await this.storage.getMusicUrlCacheCount();
+
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        enabled: isEnabled,
+        cacheCount,
+      }, enabled ? "音乐URL缓存已开启" : "音乐URL缓存已关闭"));
+    } catch (error: any) {
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
+    }
+  }
+
+  private async handleGetMusicUrlCacheStatus(_ctx: any): Promise<Response> {
+    try {
+      const isEnabled = await this.storage.isMusicUrlCacheEnabled();
+      const cacheCount = await this.storage.getMusicUrlCacheCount();
+
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        enabled: isEnabled,
+        cacheCount,
+      }));
+    } catch (error: any) {
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
+    }
+  }
+
+  private async handleClearMusicUrlCache(_ctx: any): Promise<Response> {
+    try {
+      await this.storage.clearMusicUrlCache();
+
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        cleared: true,
+      }, "音乐URL缓存已清除"));
     } catch (error: any) {
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(error.message, 500));
     }
@@ -675,6 +795,33 @@ export class APIRoutes {
       console.log('[API]   body.musicInfo?.songmid:', body.musicInfo?.songmid);
       console.log('[API]   body.musicInfo?.hash:', body.musicInfo?.hash);
       console.log('[API]   最终 songId:', songId);
+
+      const cacheEnabled = await this.storage.isMusicUrlCacheEnabled();
+      const cacheKey = `${body.source}_${songId}_${body.quality}`;
+
+      if (cacheEnabled && songId) {
+        const cachedUrl = await this.storage.getMusicUrlCache(body.source, songId, body.quality);
+        if (cachedUrl && cachedUrl.url) {
+          console.log(`[API] 使用缓存 URL, cacheKey: ${cacheKey}`);
+          const responseData = {
+            url: cachedUrl.url,
+            type: cachedUrl.quality || body.quality,
+            source: body.source,
+            quality: body.quality,
+            lyric: '',
+            tlyric: '',
+            rlyric: '',
+            lxlyric: '',
+            cached: true,
+            cachedAt: new Date(cachedUrl.cachedAt).toISOString(),
+          };
+          console.log('[API] 返回缓存数据:', JSON.stringify(responseData, null, 2));
+          console.log('========== [API] handleGetMusicUrl 结束 ==========\n');
+          return ApiResponseBuilder.toResponse(ApiResponseBuilder.success(responseData, "获取成功（缓存）"));
+        }
+        console.log(`[API] 缓存未命中, cacheKey: ${cacheKey}`);
+      }
+
       const name = body.name || body.musicInfo?.name || '未知歌曲';
       const singer = body.singer || body.musicInfo?.singer || '未知歌手';
       const interval = body.interval || body.musicInfo?.interval || null;
@@ -718,18 +865,31 @@ export class APIRoutes {
       };
       console.log('[API] 调用 handler.handleRequest, 参数:', JSON.stringify(requestData, null, 2));
 
-      // 并行获取音乐URL和歌词
       const [result, lyricResult] = await Promise.all([
         this.handler.handleRequest(requestData),
         this.getLyricForMusicUrl(body, songId, name, singer, hash, copyrightId)
       ]);
-      
+
       console.log('[API] handler.handleRequest 返回:', JSON.stringify(result, null, 2));
 
       if (result.status && result.data && result.data.result) {
         const musicUrlData = result.data.result as { url: string; type: string };
         if (musicUrlData.url) {
           console.log('[API] 获取成功，返回 URL:', musicUrlData.url);
+
+          if (musicUrlData.url.endsWith('2149972737147268278.mp3')) {
+            console.error('[API] 检测到无效URL，判断获取失败');
+            console.log('========== [API] handleGetMusicUrl 结束 ==========\n');
+            return ApiResponseBuilder.toResponse(ApiResponseBuilder.error("获取播放URL失败", 500, {
+              source: body.source,
+            }));
+          }
+
+          if (cacheEnabled && songId) {
+            await this.storage.setMusicUrlCache(body.source, songId, musicUrlData.url, body.quality);
+            console.log(`[API] 已缓存 URL, cacheKey: ${cacheKey}`);
+          }
+
           const responseData = {
             url: musicUrlData.url,
             type: musicUrlData.type,
@@ -739,6 +899,7 @@ export class APIRoutes {
             tlyric: lyricResult.tlyric || '',
             rlyric: lyricResult.rlyric || '',
             lxlyric: lyricResult.lxlyric || '',
+            cached: false,
           };
           console.log('[API] 最终响应:', JSON.stringify(responseData, null, 2));
           console.log('========== [API] handleGetMusicUrl 结束 ==========\n');
@@ -897,6 +1058,139 @@ export class APIRoutes {
       console.error('[API] 错误堆栈:', error.stack);
       console.log('========== [API] handleGetLyricDirect 异常结束 ==========\n');
       return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "获取歌词失败"));
+    }
+  }
+
+  // 处理歌单详情请求
+  private async handleGetSongListDetail(ctx: any): Promise<Response> {
+    console.log('\n========== [API] handleGetSongListDetail 开始 ==========');
+    
+    try {
+      const body = await ctx.req.json();
+      console.log('[API] 请求参数:', JSON.stringify(body, null, 2));
+
+      // 验证必要参数
+      if (!body.source) {
+        console.error('[API] 缺少source参数');
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.error("缺少必要参数: source", 400));
+      }
+
+      if (!body.id) {
+        console.error('[API] 缺少id参数');
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.error("缺少必要参数: id (歌单ID或链接)", 400));
+      }
+
+      const source = body.source;
+      const id = body.id;
+
+      // 验证音源
+      const validSources = ['wy', 'tx', 'kg', 'kw', 'mg'];
+      if (!validSources.includes(source)) {
+        console.error('[API] 不支持的音源:', source);
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.error(`不支持的音源: ${source}，支持: wy, tx, kg, kw, mg`, 400));
+      }
+
+      console.log('[API] 开始获取歌单详情, source:', source, 'id:', id);
+      
+      // 调用歌单服务
+      const result = await this.songListService.getListDetail(source, id);
+      
+      console.log('[API] 歌单详情获取成功');
+      console.log('[API] 歌单名称:', result.info.name);
+      console.log('[API] 歌曲数量:', result.list.length);
+      console.log('[API] 总数量:', result.total);
+      
+      const response = ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        list: result.list,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        source: result.source,
+        info: result.info,
+      }, "获取歌单详情成功"));
+      
+      console.log('========== [API] handleGetSongListDetail 结束 ==========\n');
+      return response;
+    } catch (error: any) {
+      console.error('[API] 获取歌单详情失败:', error.message);
+      console.error('[API] 错误堆栈:', error.stack);
+      console.log('========== [API] handleGetSongListDetail 异常结束 ==========\n');
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "获取歌单详情失败"));
+    }
+  }
+
+  // 处理短链接歌单详情请求
+  private async handleGetSongListDetailByLink(ctx: any): Promise<Response> {
+    console.log('\n========== [API] handleGetSongListDetailByLink 开始 ==========');
+    
+    try {
+      const body = await ctx.req.json();
+      console.log('[API] 请求参数:', JSON.stringify(body, null, 2));
+
+      // 验证必要参数
+      if (!body.link) {
+        console.error('[API] 缺少link参数');
+        return ApiResponseBuilder.toResponse(ApiResponseBuilder.error("缺少必要参数: link (歌单链接)", 400));
+      }
+
+      const link = body.link;
+      // 可选参数：客户端可以指定平台，如果不指定则自动识别
+      const specifiedSource = body.source;
+
+      let source: string;
+      let id: string;
+
+      if (specifiedSource) {
+        // 客户端指定了平台，直接使用
+        console.log('[API] 客户端指定了平台:', specifiedSource);
+        source = specifiedSource;
+        
+        // 从链接中提取ID
+        const extractedId = await this.shortLinkService.extractIdFromUrl(link, source);
+        if (!extractedId) {
+          console.error('[API] 无法从链接中提取ID');
+          return ApiResponseBuilder.toResponse(ApiResponseBuilder.error("无法从链接中提取歌单ID，请检查链接格式是否正确", 400));
+        }
+        id = extractedId;
+        console.log('[API] 从链接提取ID成功:', id);
+      } else {
+        // 自动识别平台和ID
+        console.log('[API] 开始解析短链接:', link);
+        const parseResult = await this.shortLinkService.parseShortLink(link);
+        console.log('[API] 短链接解析成功:', parseResult);
+        source = parseResult.source;
+        id = parseResult.id;
+      }
+      
+      // 调用歌单服务获取详情
+      console.log('[API] 开始获取歌单详情, source:', source, 'id:', id);
+      const result = await this.songListService.getListDetail(source, id);
+      
+      console.log('[API] 歌单详情获取成功');
+      console.log('[API] 歌单名称:', result.info.name);
+      console.log('[API] 歌曲数量:', result.list.length);
+      console.log('[API] 总数量:', result.total);
+      
+      const response = ApiResponseBuilder.toResponse(ApiResponseBuilder.success({
+        list: result.list,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        source: result.source,
+        info: result.info,
+        parsed: {
+          source: source,
+          id: id,
+        },
+      }, "获取歌单详情成功"));
+      
+      console.log('========== [API] handleGetSongListDetailByLink 结束 ==========\n');
+      return response;
+    } catch (error: any) {
+      console.error('[API] 获取歌单详情失败:', error.message);
+      console.error('[API] 错误堆栈:', error.stack);
+      console.log('========== [API] handleGetSongListDetailByLink 异常结束 ==========\n');
+      return ApiResponseBuilder.toResponse(ApiResponseBuilder.serverError(error.message || "获取歌单详情失败"));
     }
   }
 
