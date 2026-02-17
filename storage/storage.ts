@@ -899,7 +899,7 @@ export class ScriptStorage {
     }
 
     if (this.kv) {
-      const result = await this.kv.get<string>([API_KEY_KV_KEY]);
+      const result = await this.kv.get<string>(API_KEY_KV_KEY);
       if (result.value) {
         return result.value;
       }
@@ -922,7 +922,7 @@ export class ScriptStorage {
 
   private async saveApiKey(key: string): Promise<void> {
     if (this.kv) {
-      await this.kv.set([API_KEY_KV_KEY], key);
+      await this.kv.set(API_KEY_KV_KEY, key);
     }
 
     try {
