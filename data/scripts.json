@@ -19,7 +19,7 @@
       "allowShowUpdateAlert": true,
       "isDefault": false,
       "createdAt": 1771078418442,
-      "updatedAt": 1771667657056
+      "updatedAt": 1771693578460
     },
     {
       "id": "user_api_667_1771078470563",
@@ -41,7 +41,7 @@
       "allowShowUpdateAlert": true,
       "isDefault": false,
       "createdAt": 1771078470587,
-      "updatedAt": 1771667647065
+      "updatedAt": 1771693568466
     },
     {
       "id": "user_api_362_1771078512853",
@@ -62,7 +62,7 @@
       "allowShowUpdateAlert": true,
       "isDefault": false,
       "createdAt": 1771078512858,
-      "updatedAt": 1771667657067
+      "updatedAt": 1771693578468
     },
     {
       "id": "user_api_215_1771082129691",
@@ -73,17 +73,17 @@
       "version": "3",
       "rawScript": "/*!\n * @name 聚合API接口 (CF)\n * @description v3\n * @version 3\n * @author lerd\n */\nlet{stringify:t,parse:a}=JSON;let x=(r)=>{throw new Error(r)};let{EVENT_NAMES:n,request:b,on,send:y,version:v}=globalThis.lx;let A='https://api.music.lerd.dpdns.org';let h=(u,o={method:'GET'})=>new Promise((s,j)=>{b(u,o,(e,r)=>{if(e)return j(e);s(r)})});h(A+'/init.conf').then(r=>{if(r.body.code!==200)x(\"脚本初始化失败\");let U=r.body.data;if(U.update.version>v)y(n.updateAlert,U.update);y(n.inited,U.init);}).catch(e=>x(e));on(n.request,async({action,source,info})=>{let r=await h(`${A}/${source}`,{method:'POST',body:t(info),headers:{'Content-Type':'application/json'}});let B=r.body;if(B.code===200)return B.data.url;else if(B.code===303){let S=a(t(B.data));let D=S.request;let F=S.response;try{let z=await h(encodeURI(D.url),D.options);if(F.check.key.reduce((a,c)=>a&&a[c],z)==F.check.value){let u=F.url.reduce((a,c)=>a&&a[c],z);if(u.startsWith(\"http\"))return u;}}catch(e){x(e)}}else x(B.msg);});",
       "supportedSources": [
-        "kw",
         "kg",
+        "kw",
+        "mg",
         "tx",
-        "wy",
-        "mg"
+        "wy"
       ],
       "script": "gz_eJx1k09v0zAYxu98iqyaFnsYd2K3RJ7otg4NiW2iHRwQYm7iNt5SO9hO1yzKAYnDJBBw4jDBCSYuXJD4Sp32MbCTdOKCcvH7N7/ncdJdX7nnrXuPBJ0y7/bt1eLzZe9o/+bj9eLTdw/s7MG6GjMdKZ4ZLoU326xTM6a0C5uI5iaRykuZim3cvZcyU2qjuJjwcREYlFGlWUAr8mRweBDaqjcnQEGyVZpEyXNPsHOvr5RUNlm5etl/3j8Yvj7oPe0PAoEUe5MzbYIRkgJpJuKgQC1BMKvIJJUjmg4TrnE6r9f3iJ8Yk+mg26UZx9Nc8wg7PBxnsdBYqolfNyYE5EiScsqsgjjwH/eHfmXBHNGRklOuGQAanTrWkWtFgKGanI8Bg4qZXAnv1B5D7eDtEyagd9/vcsENjqQY+xCbhAmgmiGFRzIubCVmK4Q83NiAc9C5fXd18/XX4vLb4uf7xYcvix+/b/9cd2CNeEzakZgaGtoNxzjP7Jnh1oKtGSyAaJM9q9KgZQsMXcWhsNgm3QGGFcQRNVECGNmaW3IYSmG7WpMR1YWIQEkjd99Iy1xFDHExls6X0hEpQs8pt+aBk9WyV3VXy6arOkF3Rh4dDoY+ctyBAW4aooTR2BIHpb8jhWHCPBgWGfMDn2ZZyi2SfV/3VEvhV1UjfbuV7lRv15aRxrLW9+3aE5yrNGSpZt6/bZsbm7CmHRAKDGhaYbN3lwyWcut4r451JoVmoVFFPXdxp5IJt/P42T7Yde+CaBfL+m/Q0JHt4Shh0Rk+Y4XdEueR/WQoiqxbdG2NvoxeoQtIyLJrRtOcNWS5Tdp9/x1yy3OsDVVGv+AmAR33UXfgUn4eVlV7k7B0N1lVtQ1zq3aqJ+6mw79qJVpa",
       "allowShowUpdateAlert": true,
       "isDefault": true,
       "createdAt": 1771082129693,
-      "updatedAt": 1771667657069
+      "updatedAt": 1771693574563
     }
   ],
   "defaultSourceId": "user_api_215_1771082129691"

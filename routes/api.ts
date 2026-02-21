@@ -690,12 +690,7 @@ export class APIRoutes {
 
     try {
       const body = await ctx.req.json();
-      console.log('[API] ========== 原始请求参数 ==========');
-      console.log('[API] body.source:', body.source);
-      console.log('[API] body.quality:', body.quality);
-      console.log('[API] body.musicInfo:', JSON.stringify(body.musicInfo, null, 2));
-      console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
-      console.log('[API] =========================================');
+      console.log('[API] 请求参数:', JSON.stringify(body, null, 2));
 
       const requiredFields = ['source', 'quality'];
       for (const field of requiredFields) {
@@ -707,14 +702,13 @@ export class APIRoutes {
 
       const allowToggleSource = body.allowToggleSource !== false;
       const excludeSources = body.excludeSources || [];
-      console.log('[API] allowToggleSource:', allowToggleSource);
-      console.log('[API] excludeSources:', excludeSources);
 
       const songId = body.songmid || body.id || body.songId || body.musicInfo?.id || body.musicInfo?.songmid || body.musicInfo?.hash || '';
       console.log('[API] songId 计算过程:');
       console.log('[API]   body.songmid:', body.songmid);
       console.log('[API]   body.id:', body.id);
       console.log('[API]   body.songId:', body.songId);
+      console.log('[API]   body.musicInfo:', body.musicInfo);
       console.log('[API]   body.musicInfo?.id:', body.musicInfo?.id);
       console.log('[API]   body.musicInfo?.songmid:', body.musicInfo?.songmid);
       console.log('[API]   body.musicInfo?.hash:', body.musicInfo?.hash);
@@ -835,10 +829,6 @@ export class APIRoutes {
   }
 
   private async tryGetMusicUrl(body: any, songId: string, name: string, singer: string): Promise<{ success: boolean; url?: string; type?: string; message?: string }> {
-    console.log('[API] ========== tryGetMusicUrl 开始 ==========');
-    console.log('[API] body.source:', body.source);
-    console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
-
     const interval = body.interval || body.musicInfo?.interval || null;
     const hash = body.hash || body.musicInfo?.hash || body.musicInfo?.songmid || '';
     const albumName = body.albumName || body.musicInfo?.albumName || body.musicInfo?.album || '';
@@ -850,10 +840,7 @@ export class APIRoutes {
     console.log('[API] 生成 requestKey:', requestKey);
 
     const musicInfoSource = body.musicInfo?.source || body.source || 'unknown';
-    console.log('[API] musicInfoSource 计算过程:');
-    console.log('[API]   body.musicInfo?.source:', body.musicInfo?.source);
-    console.log('[API]   body.source:', body.source);
-    console.log('[API]   最终 musicInfoSource:', musicInfoSource);
+    console.log('[API] musicInfoSource:', musicInfoSource);
 
     const requestData = {
       requestKey,
@@ -906,10 +893,7 @@ export class APIRoutes {
     scriptId: string,
     lyricPromise?: Promise<{lyric: string; tlyric?: string; rlyric?: string; lxlyric?: string}>
   ): Promise<Response> {
-    console.log('[API] ========== tryToggleSource 开始 ==========');
-    console.log(`[API] 原始音源: ${originalSource}`);
-    console.log(`[API] 排除音源: ${excludeSources.join(', ') || '无'}`);
-    console.log(`[API] 歌曲信息: ${name} - ${singer}`);
+    console.log(`[API] 开始换源流程，原始音源: ${originalSource}`);
 
     const keyword = `${name} ${singer}`.trim();
     console.log(`[API] 跨源搜索关键词: ${keyword}`);
@@ -1108,14 +1092,30 @@ export class APIRoutes {
       return stats.success / total;
     };
 
+    const getSuccessCount = (source: string): number => {
+      const stats = sourceStats[source];
+      return stats?.success || 0;
+    };
+
     return songs.sort((a, b) => {
       const matchScoreA = a.matchScore || 0;
       const matchScoreB = b.matchScore || 0;
+      
+      const intervalMatchA = a.intervalMatch ? 1 : 0;
+      const intervalMatchB = b.intervalMatch ? 1 : 0;
+      
       const successRateA = getSuccessRate(a.source);
       const successRateB = getSuccessRate(b.source);
+      
+      const successCountA = getSuccessCount(a.source);
+      const successCountB = getSuccessCount(b.source);
 
-      const totalScoreA = matchScoreA * 0.7 + successRateA * 0.3;
-      const totalScoreB = matchScoreB * 0.7 + successRateB * 0.3;
+      if (intervalMatchA !== intervalMatchB) {
+        return intervalMatchB - intervalMatchA;
+      }
+
+      const totalScoreA = matchScoreA * 0.5 + successRateA * 0.3 + Math.min(successCountA / 100, 0.2);
+      const totalScoreB = matchScoreB * 0.5 + successRateB * 0.3 + Math.min(successCountB / 100, 0.2);
 
       return totalScoreB - totalScoreA;
     });
@@ -1153,69 +1153,115 @@ export class APIRoutes {
     const fAlbumName = filterStr(targetAlbumName || '');
     const fInterval = getIntv(targetInterval);
 
-    const isEqualsInterval = (intv: number) => Math.abs((fInterval || intv) - (intv || fInterval)) < 5;
+    const isEqualsInterval = (intv: number) => {
+      if (!fInterval && !intv) return false;
+      return Math.abs((fInterval || intv) - (intv || fInterval)) < 5;
+    };
     const isIncludesName = (name: string) => (fMusicName.includes(name) || name.includes(fMusicName));
     const isIncludesSinger = (singer: string) => fSinger ? (fSinger.includes(singer) || singer.includes(fSinger)) : true;
-    const isEqualsAlbum = (album: string) => fAlbumName ? fAlbumName === album : true;
 
-    const calculateMatchScore = (item: any): number => {
+    const processedResults = results.map(item => {
+      const resultName = trimStr(item.name || '');
+      const resultSinger = trimStr(item.singer || '');
+      const resultInterval = item.interval;
+      const resultAlbumName = trimStr(item.albumName || '');
+      
+      return {
+        ...item,
+        name: resultName,
+        singer: resultSinger,
+        interval: resultInterval,
+        albumName: resultAlbumName,
+        fSinger: filterStr(sortSingle(resultSinger)),
+        fMusicName: filterStr(resultName),
+        fAlbumName: filterStr(resultAlbumName),
+        fInterval: getIntv(resultInterval),
+        intervalMatch: isEqualsInterval(getIntv(resultInterval)),
+        nameMatch: filterStr(resultName) === fMusicName,
+        singerMatch: filterStr(sortSingle(resultSinger)) === fSinger,
+        albumMatch: filterStr(resultAlbumName) === fAlbumName,
+      };
+    });
+
+    const sortMusic = (list: any[], filter: (item: any) => boolean): any[] => {
+      const matched = list.filter(filter);
+      const rest = list.filter(item => !filter(item));
+      return [...matched, ...rest];
+    };
+
+    let sortedResults = [...processedResults];
+    
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.singerMatch && item.nameMatch && item.intervalMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.nameMatch && item.singerMatch && item.fAlbumName === fAlbumName
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.singerMatch && item.nameMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.nameMatch && item.intervalMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.singerMatch && item.intervalMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.intervalMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.nameMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      item.singerMatch
+    );
+    sortedResults = sortMusic(sortedResults, (item: any) => 
+      !!(item.fAlbumName === fAlbumName && fAlbumName)
+    );
+
+    const calculateMatchScore = (item: any, index: number): number => {
       let score = 0;
       
-      if (item.fMusicName === fMusicName) {
+      if (item.nameMatch) {
         score += 0.4;
       } else if (isIncludesName(item.fMusicName)) {
         score += 0.2;
       }
       
-      if (item.fSinger === fSinger) {
+      if (item.singerMatch) {
         score += 0.3;
       } else if (isIncludesSinger(item.fSinger)) {
         score += 0.15;
       }
       
-      if (isEqualsInterval(item.fInterval)) {
+      if (item.intervalMatch) {
         score += 0.2;
       }
       
-      if (fAlbumName && item.fAlbumName === fAlbumName) {
+      if (fAlbumName && item.albumMatch) {
         score += 0.1;
       }
+
+      const positionBonus = Math.max(0, (processedResults.length - index) / processedResults.length * 0.1);
+      score += positionBonus;
       
       return score;
     };
 
-    const processedResults = results.map(item => {
-      const resultName = trimStr(item.name || '');
-      const resultSinger = trimStr(item.singer || '');
-      const processed = {
-        ...item,
-        name: resultName,
-        singer: resultSinger,
-        fSinger: filterStr(sortSingle(resultSinger)),
-        fMusicName: filterStr(resultName),
-        fAlbumName: filterStr(item.albumName || ''),
-        fInterval: getIntv(item.interval),
-      };
-      return {
-        ...processed,
-        matchScore: calculateMatchScore(processed),
-      };
-    });
+    const bestMatch = sortedResults[0];
+    if (!bestMatch) return null;
 
-    const validResults = processedResults.filter(item => isEqualsInterval(item.fInterval));
+    const matchScore = calculateMatchScore(bestMatch, 0);
     
-    if (validResults.length === 0) {
-      const fallbackResults = processedResults.filter(item => item.matchScore > 0.3);
-      if (fallbackResults.length > 0) {
-        fallbackResults.sort((a, b) => b.matchScore - a.matchScore);
-        return fallbackResults[0];
-      }
+    if (matchScore < 0.3 && !bestMatch.intervalMatch) {
+      console.log(`[API] 最佳匹配分数过低: ${matchScore.toFixed(2)}，且时长不匹配`);
       return null;
     }
 
-    validResults.sort((a, b) => b.matchScore - a.matchScore);
-
-    return validResults[0];
+    return {
+      ...bestMatch,
+      matchScore,
+    };
   }
 
   // 辅助方法：为音乐URL接口获取歌词
