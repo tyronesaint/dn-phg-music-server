@@ -691,13 +691,11 @@ export class APIRoutes {
     try {
       const body = await ctx.req.json();
       console.log('[API] ========== 原始请求参数 ==========');
-      console.log('[API] 完整 body:', JSON.stringify(body, null, 2));
       console.log('[API] body.source:', body.source);
-      console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
       console.log('[API] body.quality:', body.quality);
-      console.log('[API] body.songmid:', body.songmid);
-      console.log('[API] body.id:', body.id);
-      console.log('[API] ========================================');
+      console.log('[API] body.musicInfo:', JSON.stringify(body.musicInfo, null, 2));
+      console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
+      console.log('[API] =========================================');
 
       const requiredFields = ['source', 'quality'];
       for (const field of requiredFields) {
@@ -709,13 +707,14 @@ export class APIRoutes {
 
       const allowToggleSource = body.allowToggleSource !== false;
       const excludeSources = body.excludeSources || [];
+      console.log('[API] allowToggleSource:', allowToggleSource);
+      console.log('[API] excludeSources:', excludeSources);
 
       const songId = body.songmid || body.id || body.songId || body.musicInfo?.id || body.musicInfo?.songmid || body.musicInfo?.hash || '';
       console.log('[API] songId 计算过程:');
       console.log('[API]   body.songmid:', body.songmid);
       console.log('[API]   body.id:', body.id);
       console.log('[API]   body.songId:', body.songId);
-      console.log('[API]   body.musicInfo:', body.musicInfo);
       console.log('[API]   body.musicInfo?.id:', body.musicInfo?.id);
       console.log('[API]   body.musicInfo?.songmid:', body.musicInfo?.songmid);
       console.log('[API]   body.musicInfo?.hash:', body.musicInfo?.hash);
@@ -839,7 +838,7 @@ export class APIRoutes {
     console.log('[API] ========== tryGetMusicUrl 开始 ==========');
     console.log('[API] body.source:', body.source);
     console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
-    
+
     const interval = body.interval || body.musicInfo?.interval || null;
     const hash = body.hash || body.musicInfo?.hash || body.musicInfo?.songmid || '';
     const albumName = body.albumName || body.musicInfo?.albumName || body.musicInfo?.album || '';
@@ -851,11 +850,10 @@ export class APIRoutes {
     console.log('[API] 生成 requestKey:', requestKey);
 
     const musicInfoSource = body.musicInfo?.source || body.source || 'unknown';
-    console.log('[API] ========== 关键: musicInfoSource 计算 ==========');
-    console.log('[API] body.musicInfo?.source:', body.musicInfo?.source);
-    console.log('[API] body.source:', body.source);
-    console.log('[API] 最终 musicInfoSource:', musicInfoSource);
-    console.log('[API] =============================================');
+    console.log('[API] musicInfoSource 计算过程:');
+    console.log('[API]   body.musicInfo?.source:', body.musicInfo?.source);
+    console.log('[API]   body.source:', body.source);
+    console.log('[API]   最终 musicInfoSource:', musicInfoSource);
 
     const requestData = {
       requestKey,
@@ -908,11 +906,10 @@ export class APIRoutes {
     scriptId: string,
     lyricPromise?: Promise<{lyric: string; tlyric?: string; rlyric?: string; lxlyric?: string}>
   ): Promise<Response> {
-    console.log(`[API] ========== 开始换源流程 ==========`);
+    console.log('[API] ========== tryToggleSource 开始 ==========');
     console.log(`[API] 原始音源: ${originalSource}`);
-    console.log(`[API] 原始 songId: ${songId}`);
-    console.log(`[API] 歌曲名: ${name}, 歌手: ${singer}`);
     console.log(`[API] 排除音源: ${excludeSources.join(', ') || '无'}`);
+    console.log(`[API] 歌曲信息: ${name} - ${singer}`);
 
     const keyword = `${name} ${singer}`.trim();
     console.log(`[API] 跨源搜索关键词: ${keyword}`);
