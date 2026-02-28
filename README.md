@@ -1,45 +1,55 @@
 # 拼好歌 后端服务框架(Deno Deploy)
 
-这是一个用 Deno Deploy 实现的 拼好歌 个人后台服务框架，此后端服务不提供音乐内容和数据，仅提供脚本运行环境和能力，数据全部由用户自行导入的第三方脚本提供，此项目参考洛雪音乐源码编写（抄来的），兼容洛雪音乐的第三方音源脚本（部分兼容）。本项目代码开源且免费，如你是付费使用本项目，建议申请仅退款。
+这是一个用 Deno Deploy 实现的 拼好歌 个人后台服务框架，此后端服务不提供音乐内容和数据，仅提供脚本运行环境和能力，数据全部由用户自行导入的脚本提供，此项目参考洛雪音乐源码编写（抄来的），兼容洛雪音乐的第三方音源脚本（部分兼容）。本项目代码开源且免费，如你是付费使用本项目，建议申请仅退款。
+
+## 关联项目
+
+- **拼好歌小程序端** - [phg-music](https://github.com/erikjamesgz/phg-music)
+
 ## 在线部署
 
 ### 部署步骤
 
-1. **Fork 项目**
-   
-   点击右上角 Fork 按钮，将本项目 Fork 到你的 GitHub 账号
+**1. Fork 项目**
 
-2. **登录 Deno**
-   
-   打开 [Deno 控制台](https://console.deno.com/)，使用 GitHub 账号登录
+打开 [本项目](https://github.com/erikjamesgz/dn-phg-music-server)，点击右上角 Fork 按钮
 
-3. **创建项目**
-   
-   - 首尔点击 "New Project"
-   - 授权并选择你 Fork 的本项目
-   - 一路下一步完成部署
+**2. 登录 Deno**
 
-4. **获取服务地址**
-   
-   部署成功后，点击项目详情页左上角 "View"，复制浏览器地址栏的链接，格式如：
-   ```
-   https://xxxxx-dn-phg-musi-xx.deno.dev/
-   ```
+打开 [Deno](https://console.deno.com/)，使用 GitHub 账号登录
 
-5. **获取 API Key**
-   
-   - 回到项目详情页，找到 "KV" 选项
-   - 滑到底部 Data 区域
-   - 找到 `["api_key"]` 对应的值（32位字符串）
+**3. 创建项目并部署**
 
-6. **拼接完整地址**
-   
-   将服务地址和 API Key 拼接，得到完整的服务器链接：
-   ```
-   https://xxxxx-dn-phg-musi-xx.deno.dev/你的API_KEY
-   ```
-   
-   此链接可直接粘贴到拼好歌小程序的服务器设置中使用。
+打开 [Deno 控制台](https://console.deno.com/)
+
+- 点击 "New APP"
+- 授权并选择你 Fork 的本项目
+- 一路下一步完成部署
+
+**4. 获取服务地址**
+
+部署成功后：
+- 在项目详情页面 点击左侧菜单 "Overview"
+- 点击项目名字右侧的 "PRODUCTION URL" 预览
+- 复制浏览器地址栏的链接，格式如：
+  ```
+  https://xxxxx-dn-phg-musi-xx.deno.dev/
+  ```
+
+**5. 获取 API Key**
+
+- 在项目详情页面点击左侧菜单 "Logs"
+- 在日志中搜索 `API前缀`
+- 找到对应的 32 位字符串
+
+**6. 拼接完整地址**
+
+将服务地址和 API Key 拼接：
+```
+https://xxxxx-dn-phg-musi-xx.deno.dev/你的API_KEY
+```
+
+此链接可直接粘贴到拼好歌小程序的服务器设置中使用。
 
 ### 费用说明
 

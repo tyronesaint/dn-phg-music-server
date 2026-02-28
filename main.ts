@@ -12,8 +12,8 @@ const handler = new RequestHandler(engine, storage);
 await storage.ready();
 
 const apiKey = await storage.getApiKey();
-console.log(`\n🔑 API前缀: /${apiKey}`);
-console.log(`   完整路径示例: /${apiKey}/api/music/url\n`);
+console.log(`\n🔑 API前缀: ${apiKey}`);
+console.log(`   完整路径示例: https://xxxxx-dn-phg-musi-xx.deno.dev/${apiKey}/api/music/url\n`);
 
 new APIRoutes(app, handler, storage, engine, apiKey);
 
