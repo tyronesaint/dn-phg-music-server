@@ -18,15 +18,29 @@
 
 打开 [Deno](https://console.deno.com/)，使用 GitHub 账号登录
 
+
+
 **3. 创建项目并部署**
 
 打开 [Deno 控制台](https://console.deno.com/)
 
 - 点击 "New APP"
 - 授权并选择你 Fork 的本项目
-- 一路下一步完成部署
+- 一路下一步完成部署，如遇到失败，请进行第四部创建kv数据库后重试
 
-**4. 获取服务地址**
+**4. 创建kv数据库并绑定**
+
+打开 [Deno 控制台](https://console.deno.com/)
+
+- 在项目详情页面 点击左侧菜单 "Databases"
+- 在页面中点击"Attach Database"
+- 弹窗选择"Select a database" 然后选择 "Provision new database" 创建新数据库
+- 然后选择“Deno KV” 
+- 在弹窗中输入数据库名字后 点击"Provision Database",数据库就创建成功了
+- 弹窗中选择你刚刚创的数据库，点击"Assign database" 这就完成数据库的绑定了
+
+
+**5. 获取服务地址**
 
 部署成功后：
 - 在项目详情页面 点击左侧菜单 "Overview"
@@ -36,11 +50,11 @@
   https://xxxxx-dn-phg-musi-xx.deno.dev/
   ```
 
-**5. 获取 API Key**
+**6. 获取 API Key**
 
 - 在项目详情页面点击左侧菜单 "Logs"
 - 在日志中搜索 `API前缀`
-- 找到对应的 32 位字符串
+- 找到最底下的那个`API前缀`对应的 32 位字符串
 
 **6. 拼接完整地址**
 
