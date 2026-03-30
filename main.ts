@@ -39,11 +39,12 @@ const loadScriptPromises = scripts.map(async (script) => {
 await Promise.all(loadScriptPromises);
 
 if (hasInitFailed) {
-    console.error('❌ 脚本初始化失败，服务器无法启动');
-    Deno.exit(1);
+    console.warn('⚠️ 部分脚本加载失败，但服务将继续运行');
+    console.warn('⚠️ 请重新导入脚本或检查脚本 URL 是否有效');
+    // 不退出服务，继续运行
 }
 
-console.log('所有脚本加载完成');
+console.log('脚本加载完成');
 
 globalThis.addEventListener("unhandledrejection", (event: PromiseRejectionEvent) => {
   console.error("\n========== [Unhandled Promise Rejection] ==========");
