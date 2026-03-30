@@ -9,7 +9,8 @@ interface ScriptStorageItem {
   author: string;
   homepage: string;
   version: string;
-  script: string;
+  script: string;  // 本地环境存储脚本内容
+  sourceUrl?: string;  // Deno Deploy 环境存储 URL，启动时下载
   allowShowUpdateAlert: boolean;
   isDefault: boolean;
   supportedSources: string[];
@@ -19,6 +20,27 @@ interface ScriptStorageItem {
 
 interface StorageData {
   scripts: ScriptStorageItem[];
+  defaultSourceId: string | null;
+}
+
+interface KvScriptItem {
+  // KV 中只存储元信息和 URL，不存储脚本内容
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  homepage: string;
+  version: string;
+  sourceUrl?: string;  // 脚本下载地址
+  allowShowUpdateAlert: boolean;
+  isDefault: boolean;
+  supportedSources: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface KvStorageData {
+  scripts: KvScriptItem[];
   defaultSourceId: string | null;
 }
 
@@ -97,13 +119,29 @@ export class ScriptStorage {
         console.log("[Storage] Using KV storage (Deno Deploy environment)");
         if (this.kv) {
           console.log("[Storage] Reading from KV with key:", STORAGE_KEY);
-          const result = await this.kv.get<StorageData>([STORAGE_KEY]);
+          const result = await this.kv.get<KvStorageData>([STORAGE_KEY]);
           console.log("[Storage] KV result:", result.value ? "有数据" : "无数据");
           if (result.value) {
             const data = result.value;
             if (data.scripts) {
               for (const item of data.scripts) {
-                this.scripts.set(item.id, item);
+                // KV 中没有脚本内容，需要从 URL 下载
+                let scriptContent = "";
+                if (item.sourceUrl) {
+                  console.log(`[Storage] Downloading script from URL: ${item.sourceUrl}`);
+                  try {
+                    const response = await fetch(item.sourceUrl);
+                    scriptContent = await response.text();
+                    console.log(`[Storage] Script downloaded, size: ${scriptContent.length} bytes`);
+                  } catch (e) {
+                    console.error(`[Storage] Failed to download script from ${item.sourceUrl}:`, e);
+                  }
+                }
+                const fullItem: ScriptStorageItem = {
+                  ...item,
+                  script: scriptContent,
+                };
+                this.scripts.set(item.id, fullItem);
               }
             }
             this.defaultSourceId = data.defaultSourceId || null;
@@ -149,20 +187,41 @@ export class ScriptStorage {
     console.log(`[Storage] saveToStorage called, isDenoDeploy: ${isDenoDeploy}, kv: ${this.kv ? '有' : '无'}, scripts: ${this.scripts.size}`);
     try {
       const items = Array.from(this.scripts.values());
-      const data: StorageData = {
-        scripts: items,
-        defaultSourceId: this.defaultSourceId,
-      };
       
-      // Deno Deploy 环境使用 KV
+      // Deno Deploy 环境使用 KV，但不存储脚本内容（太大）
       if (isDenoDeploy && this.kv) {
-        console.log("[Storage] Saving to KV, scripts count:", data.scripts.length);
-        await this.kv.set([STORAGE_KEY], data);
+        // 只存储元信息和 URL，不存储脚本内容
+        const kvItems: KvScriptItem[] = items.map(item => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          author: item.author,
+          homepage: item.homepage,
+          version: item.version,
+          sourceUrl: item.sourceUrl,  // 存储 URL，启动时重新下载
+          allowShowUpdateAlert: item.allowShowUpdateAlert,
+          isDefault: item.isDefault,
+          supportedSources: item.supportedSources,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }));
+        const kvData: KvStorageData = {
+          scripts: kvItems,
+          defaultSourceId: this.defaultSourceId,
+        };
+        console.log("[Storage] Saving to KV (metadata only), scripts count:", kvItems.length);
+        const dataSize = JSON.stringify(kvData).length;
+        console.log("[Storage] KV data size:", dataSize, "bytes");
+        await this.kv.set([STORAGE_KEY], kvData);
         console.log("[Storage] Saved to KV successfully");
         return;
       }
 
-      // 本地环境使用文件
+      // 本地环境使用文件，存储完整数据
+      const data: StorageData = {
+        scripts: items,
+        defaultSourceId: this.defaultSourceId,
+      };
       console.log("[Storage] Saving to file, scripts count:", data.scripts.length);
       const jsonData = JSON.stringify(data, null, 2);
       await Deno.writeTextFile(STORAGE_FILE, jsonData);
@@ -288,9 +347,18 @@ export class ScriptStorage {
     const scriptInfo = this.parseScriptInfo(script);
     const supportedSources = this.parseSupportedSources(script);
 
+    // Deno Deploy 环境不存储脚本内容（太大），只存储元信息
+    // 注意：直接导入脚本内容的方式在 Deno Deploy 中无法持久化，建议使用 URL 导入
+    let compressedScript = "";
+    if (!isDenoDeploy) {
+      compressedScript = await this.deflateScript(script);
+    } else {
+      console.log("[Storage] Warning: Direct script import in Deno Deploy will not persist. Use importScriptFromUrl instead.");
+    }
+
     const storageItem: ScriptStorageItem = {
       ...scriptInfo,
-      script: await this.deflateScript(script),
+      script: compressedScript,
       allowShowUpdateAlert: true,
       isDefault: false,
       supportedSources,
@@ -347,14 +415,39 @@ export class ScriptStorage {
         throw new Error(`脚本过大: ${script.length} 字节 (最大 ${MAX_SCRIPT_SIZE} 字节)`);
       }
       
-      const scriptInfo = await this.importScript(script);
-      
-      // 如果是第一个脚本，自动设置为默认
-      if (this.scripts.size === 1) {
+      const scriptInfo = this.parseScriptInfo(script);
+      const supportedSources = this.parseSupportedSources(script);
+
+      // 压缩脚本内容用于本地存储
+      let compressedScript = "";
+      if (!isDenoDeploy) {
+        compressedScript = await this.deflateScript(script);
+      }
+
+      const storageItem: ScriptStorageItem = {
+        ...scriptInfo,
+        script: compressedScript,
+        sourceUrl: url,  // 保存 URL，Deno Deploy 启动时重新下载
+        allowShowUpdateAlert: true,
+        isDefault: false,
+        supportedSources,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const isFirstScript = this.scripts.size === 0;
+      this.scripts.set(scriptInfo.id, storageItem);
+      await this.saveToStorage();
+
+      if (isFirstScript) {
         await this.setDefaultSource(scriptInfo.id);
       }
-      
-      return scriptInfo;
+
+      // 返回未压缩的脚本
+      return {
+        ...scriptInfo,
+        rawScript: script,
+      };
     } catch (error: any) {
       clearTimeout(timeoutId);
       console.error('[Storage] importScriptFromUrl error:', error);
@@ -384,9 +477,16 @@ export class ScriptStorage {
     scriptInfo.id = id;
     const supportedSources = this.parseSupportedSources(script);
 
+    // Deno Deploy 环境不存储脚本内容
+    let compressedScript = "";
+    if (!isDenoDeploy) {
+      compressedScript = await this.deflateScript(script);
+    }
+
     const updatedItem: ScriptStorageItem = {
       ...scriptInfo,
-      script: await this.deflateScript(script),
+      script: compressedScript,
+      sourceUrl: existingItem.sourceUrl,  // 保留原有的 sourceUrl
       allowShowUpdateAlert: existingItem.allowShowUpdateAlert,
       isDefault: existingItem.isDefault,
       supportedSources,
