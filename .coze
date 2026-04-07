@@ -1,0 +1,10 @@
+[project]
+requires = ["deno"]
+
+[dev]
+build = ["/bin/sh", "-c", "if ! command -v deno &> /dev/null; then curl -fsSL https://deno.land/install.sh | sh; fi"]
+run = ["/bin/sh", "-c", "export PATH=\"$HOME/.deno/bin:$PATH\" && PORT=5000 deno run --allow-net --allow-read --allow-write --allow-import --allow-env main.ts"]
+
+[deploy]
+build = ["/bin/sh", "-c", "if ! command -v deno &> /dev/null; then curl -fsSL https://deno.land/install.sh | sh; fi"]
+run = ["/bin/sh", "-c", "export PATH=\"$HOME/.deno/bin:$PATH\" && PORT=5000 deno run --allow-net --allow-read --allow-write --allow-import --allow-env main.ts"]

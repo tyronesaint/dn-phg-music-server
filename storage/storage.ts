@@ -1,0 +1,1229 @@
+import { ScriptInfo } from "../engine/script_engine.ts";
+import pako from "npm:pako";
+import { Buffer } from "npm:buffer";
+
+interface ScriptStorageItem {
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  homepage: string;
+  version: string;
+  script: string;  // 本地环境存储脚本内容
+  sourceUrl?: string;  // Deno Deploy 环境存储 URL，启动时下载
+  allowShowUpdateAlert: boolean;
+  isDefault: boolean;
+  supportedSources: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface StorageData {
+  scripts: ScriptStorageItem[];
+  defaultSourceId: string | null;
+}
+
+interface KvScriptItem {
+  // KV 中只存储元信息和 URL，不存储脚本内容
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  homepage: string;
+  version: string;
+  sourceUrl?: string;  // 脚本下载地址
+  allowShowUpdateAlert: boolean;
+  isDefault: boolean;
+  supportedSources: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface KvStorageData {
+  scripts: KvScriptItem[];
+  defaultSourceId: string | null;
+}
+
+const STORAGE_KEY = "dn_music_scripts";
+const STORAGE_FILE = "./data/scripts.json";
+const CACHE_FILE = "./data/music_url_cache.json";
+const SOURCE_STATS_FILE = "./data/source_stats.json";
+const API_KEY_FILE = "./data/api_key.json";
+const API_KEY_KV_KEY = ["api_key"];
+
+const DEFAULT_SCRIPT_INFO: Partial<ScriptInfo> = {
+  name: "",
+  description: "",
+  author: "",
+  homepage: "",
+  version: "",
+};
+
+// 检查是否在 Deno Deploy 环境
+const isDenoDeploy = Deno.env.get("DENO_DEPLOYMENT_ID") !== undefined;
+console.log(`[Storage] isDenoDeploy: ${isDenoDeploy}, DENO_DEPLOYMENT_ID: ${Deno.env.get("DENO_DEPLOYMENT_ID")}`);
+
+// 确保数据目录存在
+async function ensureDataDir(): Promise<void> {
+  if (isDenoDeploy) return;
+  try {
+    await Deno.mkdir("./data", { recursive: true });
+  } catch (error) {
+    if (!(error instanceof Deno.errors.AlreadyExists)) {
+      throw error;
+    }
+  }
+}
+
+export class ScriptStorage {
+  private scripts: Map<string, ScriptStorageItem> = new Map();
+  private defaultSourceId: string | null = null;
+  private readyPromise: Promise<void>;
+  private kv: Deno.Kv | null = null;
+
+  // 缓存数据（减少 KV 读写操作）
+  private sourceStatsCache: ScriptSourceStats | null = null;
+  private scriptStatsCache: ScriptStatsData | null = null;
+  private circuitBreakerCache: CircuitBreakerData | null = null;
+
+  constructor() {
+    this.readyPromise = this.loadFromStorage().catch((error) => {
+      console.error("加载脚本存储失败:", error);
+    });
+  }
+
+  async ready(): Promise<void> {
+    await this.readyPromise;
+  }
+
+  private async initKv(): Promise<Deno.Kv | null> {
+    try {
+      return await Deno.openKv();
+    } catch (error) {
+      console.error("[Storage] Failed to open KV:", error);
+      return null;
+    }
+  }
+
+  private async loadFromStorage(): Promise<void> {
+    console.log(`[Storage] loadFromStorage called, isDenoDeploy: ${isDenoDeploy}`);
+    try {
+      // 确保数据目录存在
+      await ensureDataDir();
+      
+      // 初始化 KV（用于缓存功能）
+      this.kv = await this.initKv();
+      if (this.kv) {
+        console.log("[Storage] KV initialized successfully");
+      } else {
+        console.log("[Storage] KV not available, caching will be disabled");
+      }
+
+      // Deno Deploy 环境使用 KV 存储脚本
+      if (isDenoDeploy) {
+        console.log("[Storage] Using KV storage (Deno Deploy environment)");
+        if (this.kv) {
+          console.log("[Storage] Reading from KV with key:", STORAGE_KEY);
+          const result = await this.kv.get<KvStorageData>([STORAGE_KEY]);
+          console.log("[Storage] KV result:", result.value ? "有数据" : "无数据");
+          if (result.value) {
+            const data = result.value;
+            if (data.scripts) {
+              for (const item of data.scripts) {
+                // KV 中没有脚本内容，需要从 URL 下载
+                let scriptContent = "";
+                if (item.sourceUrl) {
+                  console.log(`[Storage] Downloading script from URL: ${item.sourceUrl}`);
+                  try {
+                    const response = await fetch(item.sourceUrl, {
+                      headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Deno Deploy)',
+                      },
+                    });
+                    if (!response.ok) {
+                      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    scriptContent = await response.text();
+                    console.log(`[Storage] Script downloaded, size: ${scriptContent.length} bytes`);
+                  } catch (e) {
+                    console.error(`[Storage] Failed to download script from ${item.sourceUrl}:`, e);
+                    // 下载失败，跳过这个脚本，不加入列表
+                    continue;
+                  }
+                }
+                // 只有下载成功的脚本才加入列表
+                if (scriptContent) {
+                  const fullItem: ScriptStorageItem = {
+                    ...item,
+                    script: scriptContent,
+                  };
+                  this.scripts.set(item.id, fullItem);
+                } else {
+                  console.warn(`[Storage] Script ${item.name} has no content, skipping`);
+                }
+              }
+            }
+            this.defaultSourceId = data.defaultSourceId || null;
+            console.log(`[Storage] Loaded ${this.scripts.size} scripts from KV (metadata only)`);
+          } else {
+            console.log("[Storage] No data found in KV, scripts will be empty");
+          }
+        } else {
+          console.log("[Storage] Deno Deploy environment but KV not available, scripts will be empty");
+        }
+
+        // 预加载缓存数据
+        await this.preloadCaches();
+        return;
+      }
+
+      // 本地环境使用文件
+      let storedData: string | null = null;
+
+      try {
+        storedData = await Deno.readTextFile(STORAGE_FILE);
+      } catch {
+        return;
+      }
+
+      if (storedData) {
+        const data: StorageData = JSON.parse(storedData);
+
+        if (data.scripts) {
+          for (const item of data.scripts) {
+            this.scripts.set(item.id, item);
+          }
+        }
+
+        this.defaultSourceId = data.defaultSourceId || null;
+
+        const scriptCount = this.scripts.size;
+        console.log(`[Storage] Loaded ${scriptCount} scripts from file`);
+      }
+
+      // 预加载缓存数据
+      await this.preloadCaches();
+    } catch (error) {
+      console.error("加载脚本存储失败:", error);
+    }
+  }
+
+  private async preloadCaches(): Promise<void> {
+    console.log("[Storage] Preloading caches...");
+
+    if (this.kv) {
+      try {
+        const [sourceStatsResult, scriptStatsResult, circuitBreakerResult] = await Promise.all([
+          this.kv.get<ScriptSourceStats>(ScriptStorage.SOURCE_STATS_KEY),
+          this.kv.get<ScriptStatsData>(ScriptStorage.SCRIPT_STATS_KEY),
+          this.kv.get<CircuitBreakerData>(ScriptStorage.CIRCUIT_BREAKER_KEY),
+        ]);
+
+        this.sourceStatsCache = sourceStatsResult.value || {};
+        this.scriptStatsCache = scriptStatsResult.value || {};
+        this.circuitBreakerCache = circuitBreakerResult.value || {};
+
+        console.log("[Storage] Caches preloaded from KV");
+      } catch (error) {
+        console.error("[Storage] Failed to preload caches from KV:", error);
+        this.sourceStatsCache = {};
+        this.scriptStatsCache = {};
+        this.circuitBreakerCache = {};
+      }
+    } else {
+      try {
+        const [sourceStatsData, scriptStatsData, circuitBreakerData] = await Promise.all([
+          Deno.readTextFile(SOURCE_STATS_FILE).catch(() => '{}'),
+          Deno.readTextFile('./data/script_stats.json').catch(() => '{}'),
+          Deno.readTextFile('./data/circuit_breaker.json').catch(() => '{}'),
+        ]);
+
+        this.sourceStatsCache = JSON.parse(sourceStatsData);
+        this.scriptStatsCache = JSON.parse(scriptStatsData);
+        this.circuitBreakerCache = JSON.parse(circuitBreakerData);
+
+        console.log("[Storage] Caches preloaded from files");
+      } catch (error) {
+        console.error("[Storage] Failed to preload caches from files:", error);
+        this.sourceStatsCache = {};
+        this.scriptStatsCache = {};
+        this.circuitBreakerCache = {};
+      }
+    }
+  }
+
+  private async saveToStorage(): Promise<void> {
+    console.log(`[Storage] saveToStorage called, isDenoDeploy: ${isDenoDeploy}, kv: ${this.kv ? '有' : '无'}, scripts: ${this.scripts.size}`);
+    try {
+      const items = Array.from(this.scripts.values());
+
+      // Deno Deploy 环境使用 KV，但不存储脚本内容（太大）
+      if (isDenoDeploy && this.kv) {
+        // 只存储元信息和 URL，不存储脚本内容
+        const kvItems: KvScriptItem[] = items.map(item => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          author: item.author,
+          homepage: item.homepage,
+          version: item.version,
+          sourceUrl: item.sourceUrl,  // 存储 URL，启动时重新下载
+          allowShowUpdateAlert: item.allowShowUpdateAlert,
+          isDefault: item.isDefault,
+          supportedSources: item.supportedSources,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }));
+        const kvData: KvStorageData = {
+          scripts: kvItems,
+          defaultSourceId: this.defaultSourceId,
+        };
+        console.log("[Storage] Saving to KV (metadata only), scripts count:", kvItems.length);
+        const dataSize = JSON.stringify(kvData).length;
+        console.log("[Storage] KV data size:", dataSize, "bytes");
+        await this.kv.set([STORAGE_KEY], kvData);
+        console.log("[Storage] Saved to KV successfully");
+
+        // 同时保存统计数据
+        await this.saveAllStats();
+        return;
+      }
+
+      // 本地环境使用文件，存储完整数据
+      const data: StorageData = {
+        scripts: items,
+        defaultSourceId: this.defaultSourceId,
+      };
+      console.log("[Storage] Saving to file, scripts count:", data.scripts.length);
+      const jsonData = JSON.stringify(data, null, 2);
+      await Deno.writeTextFile(STORAGE_FILE, jsonData);
+      console.log("[Storage] Saved to file successfully");
+    } catch (error) {
+      console.error("保存脚本存储失败:", error);
+    }
+  }
+
+  private parseSupportedSources(script: string): string[] {
+    const sources: string[] = [];
+    const patterns = [
+      /['"]?(kw|kg|tx|wy|mg|xm)['"]?\s*:/g,
+      /source[s]?\s*[:=]\s*\[([^\]]+)\]/g,
+      /MUSIC_SOURCE\s*[=:]\s*Object\.keys\s*\(\s*MUSIC_QUALITY\s*\)/g,
+    ];
+
+    for (const pattern of patterns) {
+      const matches = script.matchAll(pattern);
+      for (const match of matches) {
+        if (match[1]) {
+          const sourcesStr = match[1];
+          const sourceList = sourcesStr.match(/['"]?(kw|kg|tx|wy|mg|xm)['"]?/g);
+          if (sourceList) {
+            for (const s of sourceList) {
+              const cleanSource = s.replace(/['"]/g, '').trim();
+              if (!sources.includes(cleanSource)) {
+                sources.push(cleanSource);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return sources.length > 0 ? sources : ['unknown'];
+  }
+
+  private async deflateScript(script: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      try {
+        const buffer = Buffer.from(script, 'utf8');
+        const compressed = pako.deflate(buffer);
+        resolve('gz_' + Buffer.from(compressed).toString('base64'));
+      } catch (err: any) {
+        reject(err);
+      }
+    });
+  }
+
+  private async inflateScript(script: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      try {
+        if (script.startsWith('gz_')) {
+          const compressed = Buffer.from(script.substring(3), 'base64');
+          const decompressed = pako.inflate(compressed);
+          resolve(Buffer.from(decompressed).toString('utf8'));
+        } else {
+          resolve(script);
+        }
+      } catch (err: any) {
+        reject(err);
+      }
+    });
+  }
+
+  parseScriptInfo(script: string): ScriptInfo {
+    const commentMatch = /^\/\*[\s\S]+?\*\//.exec(script);
+    console.log('[Storage] Script first 200 chars:', script.substring(0, 200));
+    console.log('[Storage] Comment match:', commentMatch ? commentMatch[0].substring(0, 100) : 'No match');
+    if (!commentMatch) {
+      throw new Error("无效的自定义源文件：缺少注释头部");
+    }
+
+    const commentBlock = commentMatch[0];
+    const info = this.parseCommentBlock(commentBlock);
+    const supportedSources = this.parseSupportedSources(script);
+
+    return {
+      id: `user_api_${Math.random().toString().substring(2, 5)}_${Date.now()}`,
+      name: info.name || `user_api_${new Date().toLocaleString()}`,
+      description: info.description || "",
+      author: info.author || "",
+      homepage: info.homepage || "",
+      version: info.version || "",
+      rawScript: script,
+      supportedSources,
+    };
+  }
+
+  private parseCommentBlock(commentBlock: string): Record<string, string> {
+    const INFO_NAMES = {
+      name: 24,
+      description: 36,
+      author: 56,
+      homepage: 1024,
+      version: 36,
+    } as const;
+    type INFO_NAMES_Type = typeof INFO_NAMES;
+
+    const infoArr = commentBlock.split(/\r?\n/);
+    const rxp = /^\s?\*\s?@(\w+)\s(.+)$/;
+    const infos: Partial<Record<keyof typeof INFO_NAMES, string>> = {};
+
+    for (const info of infoArr) {
+      const result = rxp.exec(info);
+      if (!result) continue;
+      const key = result[1] as keyof typeof INFO_NAMES;
+      if (INFO_NAMES[key] == null) continue;
+      infos[key] = result[2].trim();
+    }
+
+    for (const [key, len] of Object.entries(INFO_NAMES) as Array<{ [K in keyof INFO_NAMES_Type]: [K, INFO_NAMES_Type[K]] }[keyof INFO_NAMES_Type]>) {
+      infos[key] ||= '';
+      if (infos[key] == null) infos[key] = '';
+      else if (infos[key].length > len) infos[key] = infos[key].substring(0, len) + '...';
+    }
+
+    return infos as Record<keyof typeof INFO_NAMES, string>;
+  }
+
+  async importScript(script: string): Promise<ScriptInfo> {
+    const scriptInfo = this.parseScriptInfo(script);
+    const supportedSources = this.parseSupportedSources(script);
+
+    // Deno Deploy 环境不存储脚本内容（太大），只存储元信息
+    // 注意：直接导入脚本内容的方式在 Deno Deploy 中无法持久化，建议使用 URL 导入
+    let compressedScript = "";
+    if (!isDenoDeploy) {
+      compressedScript = await this.deflateScript(script);
+    } else {
+      console.log("[Storage] Warning: Direct script import in Deno Deploy will not persist. Use importScriptFromUrl instead.");
+    }
+
+    const storageItem: ScriptStorageItem = {
+      ...scriptInfo,
+      script: compressedScript,
+      allowShowUpdateAlert: true,
+      isDefault: false,
+      supportedSources,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    const isFirstScript = this.scripts.size === 0;
+    this.scripts.set(scriptInfo.id, storageItem);
+    await this.saveToStorage();
+
+    if (isFirstScript) {
+      await this.setDefaultSource(scriptInfo.id);
+    }
+
+    return scriptInfo;
+  }
+
+  async importScriptFromUrl(url: string): Promise<ScriptInfo> {
+    console.log('[Storage] importScriptFromUrl called with URL:', url);
+    if (!/^https?:\/\//.test(url)) {
+      throw new Error("无效的URL格式");
+    }
+
+    const MAX_SCRIPT_SIZE = 9_000_000;
+    const TIMEOUT = 30_000;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+
+    try {
+      console.log('[Storage] Fetching URL:', url);
+      const response = await fetch(url, {
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`下载失败: ${response.status} ${response.statusText}`);
+      }
+
+      const contentLength = response.headers.get('content-length');
+      if (contentLength && parseInt(contentLength) > MAX_SCRIPT_SIZE) {
+        throw new Error(`脚本过大: ${contentLength} 字节 (最大 ${MAX_SCRIPT_SIZE} 字节)`);
+      }
+
+      const script = await response.text();
+      console.log('[Storage] Script downloaded, length:', script.length);
+      console.log('[Storage] Script first 100 chars:', script.substring(0, 100));
+      
+      if (script.length > MAX_SCRIPT_SIZE) {
+        throw new Error(`脚本过大: ${script.length} 字节 (最大 ${MAX_SCRIPT_SIZE} 字节)`);
+      }
+      
+      const scriptInfo = this.parseScriptInfo(script);
+      const supportedSources = this.parseSupportedSources(script);
+
+      // 压缩脚本内容用于本地存储
+      let compressedScript = "";
+      if (!isDenoDeploy) {
+        compressedScript = await this.deflateScript(script);
+      }
+
+      const storageItem: ScriptStorageItem = {
+        ...scriptInfo,
+        script: compressedScript,
+        sourceUrl: url,  // 保存 URL，Deno Deploy 启动时重新下载
+        allowShowUpdateAlert: true,
+        isDefault: false,
+        supportedSources,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const isFirstScript = this.scripts.size === 0;
+      this.scripts.set(scriptInfo.id, storageItem);
+      await this.saveToStorage();
+
+      if (isFirstScript) {
+        await this.setDefaultSource(scriptInfo.id);
+      }
+
+      // 返回未压缩的脚本
+      return {
+        ...scriptInfo,
+        rawScript: script,
+      };
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error('[Storage] importScriptFromUrl error:', error);
+      if (error.name === 'AbortError') {
+        throw new Error('请求超时');
+      }
+      throw error;
+    }
+  }
+
+  async importScriptFromFile(fileContent: string, fileName?: string): Promise<ScriptInfo> {
+    const script = fileContent.trim();
+    if (!script) {
+      throw new Error("文件内容为空");
+    }
+
+    return this.importScript(script);
+  }
+
+  async updateScript(id: string, script: string): Promise<ScriptInfo | null> {
+    const existingItem = this.scripts.get(id);
+    if (!existingItem) {
+      return null;
+    }
+
+    const scriptInfo = this.parseScriptInfo(script);
+    scriptInfo.id = id;
+    const supportedSources = this.parseSupportedSources(script);
+
+    // Deno Deploy 环境不存储脚本内容
+    let compressedScript = "";
+    if (!isDenoDeploy) {
+      compressedScript = await this.deflateScript(script);
+    }
+
+    const updatedItem: ScriptStorageItem = {
+      ...scriptInfo,
+      script: compressedScript,
+      sourceUrl: existingItem.sourceUrl,  // 保留原有的 sourceUrl
+      allowShowUpdateAlert: existingItem.allowShowUpdateAlert,
+      isDefault: existingItem.isDefault,
+      supportedSources,
+      createdAt: existingItem.createdAt,
+      updatedAt: Date.now(),
+    };
+
+    this.scripts.set(id, updatedItem);
+    await this.saveToStorage();
+
+    return scriptInfo;
+  }
+
+  async getScript(id: string): Promise<ScriptInfo | null> {
+    const item = this.scripts.get(id);
+    if (!item) {
+      return null;
+    }
+
+    const decompressedScript = await this.inflateScript(item.script);
+
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      author: item.author,
+      homepage: item.homepage,
+      version: item.version,
+      rawScript: decompressedScript,
+      supportedSources: item.supportedSources,
+    };
+  }
+
+  /**
+   * 获取脚本元数据（不包含脚本内容）
+   * 用于统计、状态检查等只需要元信息的场景
+   */
+  getScriptMetadata(id: string): { id: string; name: string; description: string; author: string; homepage: string; version: string; supportedSources: string[] } | null {
+    const item = this.scripts.get(id);
+    if (!item) {
+      return null;
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      author: item.author,
+      homepage: item.homepage,
+      version: item.version,
+      supportedSources: item.supportedSources,
+    };
+  }
+
+  async getScriptRaw(id: string): Promise<string | null> {
+    const item = this.scripts.get(id);
+    if (!item) {
+      return null;
+    }
+
+    return await this.inflateScript(item.script);
+  }
+
+  getScripts(): ScriptInfo[] {
+    const result: ScriptInfo[] = [];
+    for (const item of this.scripts.values()) {
+      result.push({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        author: item.author,
+        homepage: item.homepage,
+        version: item.version,
+        rawScript: "",
+        supportedSources: item.supportedSources,
+      });
+    }
+    return result;
+  }
+
+  async getAllScripts(): Promise<ScriptInfo[]> {
+    const result: ScriptInfo[] = [];
+    for (const item of this.scripts.values()) {
+      const decompressedScript = await this.inflateScript(item.script);
+      result.push({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        author: item.author,
+        homepage: item.homepage,
+        version: item.version,
+        rawScript: decompressedScript,
+        supportedSources: item.supportedSources,
+      });
+    }
+    return result;
+  }
+
+  private formatDate(timestamp: number): string {
+    const date = new Date(timestamp);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  getLoadedScripts(): Array<{ id: string; name: string; description: string; author: string; homepage: string; version: string; createdAt: string; supportedSources: string[]; isDefault: boolean }> {
+    const result: Array<{ id: string; name: string; description: string; author: string; homepage: string; version: string; createdAt: string; supportedSources: string[]; isDefault: boolean }> = [];
+    for (const item of this.scripts.values()) {
+      result.push({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        author: item.author,
+        homepage: item.homepage,
+        version: item.version,
+        createdAt: this.formatDate(item.createdAt),
+        supportedSources: item.supportedSources,
+        isDefault: item.id === this.defaultSourceId,
+      });
+    }
+    return result;
+  }
+
+  async removeScript(id: string): Promise<boolean> {
+    const deleted = this.scripts.delete(id);
+    if (deleted) {
+      const wasDefault = this.defaultSourceId === id;
+      
+      if (wasDefault) {
+        const remainingScripts = Array.from(this.scripts.keys());
+        if (remainingScripts.length > 0) {
+          this.defaultSourceId = remainingScripts[0];
+        } else {
+          this.defaultSourceId = null;
+        }
+      }
+      
+      await this.saveToStorage();
+    }
+    return deleted;
+  }
+
+  async removeScripts(ids: string[]): Promise<number> {
+    let removed = 0;
+    for (const id of ids) {
+      if (this.scripts.delete(id)) {
+        removed++;
+        if (this.defaultSourceId === id) {
+          this.defaultSourceId = null;
+        }
+      }
+    }
+    if (removed > 0) {
+      await this.saveToStorage();
+    }
+    return removed;
+  }
+
+  async setAllowShowUpdateAlert(id: string, enable: boolean): Promise<boolean> {
+    const item = this.scripts.get(id);
+    if (!item) {
+      return false;
+    }
+
+    item.allowShowUpdateAlert = enable;
+    item.updatedAt = Date.now();
+    await this.saveToStorage();
+
+    return true;
+  }
+
+  getAllowShowUpdateAlert(id: string): boolean {
+    return this.scripts.get(id)?.allowShowUpdateAlert ?? false;
+  }
+
+  async setDefaultSource(id: string): Promise<boolean> {
+    if (!this.scripts.has(id)) {
+      return false;
+    }
+
+    for (const [scriptId, item] of this.scripts) {
+      item.isDefault = scriptId === id;
+    }
+
+    this.defaultSourceId = id;
+    await this.saveToStorage();
+
+    return true;
+  }
+
+  getDefaultSource(): string | null {
+    return this.defaultSourceId;
+  }
+
+  getDefaultSourceInfo(): { id: string | null; name: string; supportedSources: string[] } | null {
+    if (!this.defaultSourceId) {
+      return null;
+    }
+
+    const item = this.scripts.get(this.defaultSourceId);
+    if (!item) {
+      return null;
+    }
+
+    return {
+      id: this.defaultSourceId,
+      name: item.name,
+      supportedSources: item.supportedSources,
+    };
+  }
+
+  clearDefaultSource(): void {
+    this.defaultSourceId = null;
+    for (const item of this.scripts.values()) {
+      item.isDefault = false;
+    }
+    this.saveToStorage();
+  }
+
+  getScriptCount(): number {
+    return this.scripts.size;
+  }
+
+  clearAllScripts(): void {
+    this.scripts.clear();
+    this.defaultSourceId = null;
+    this.saveToStorage();
+  }
+
+  async exportScript(id: string): Promise<string | null> {
+    return this.getScriptRaw(id);
+  }
+
+  async exportAllScripts(): Promise<string[]> {
+    const scripts: string[] = [];
+    for (const item of this.scripts.values()) {
+      const rawScript = await this.inflateScript(item.script);
+      scripts.push(rawScript);
+    }
+    return scripts;
+  }
+
+  getSupportedSources(scriptId?: string): string[] {
+    if (scriptId) {
+      const item = this.scripts.get(scriptId);
+      return item?.supportedSources || [];
+    }
+
+    const allSources = new Set<string>();
+    for (const item of this.scripts.values()) {
+      for (const source of item.supportedSources) {
+        allSources.add(source);
+      }
+    }
+    return Array.from(allSources);
+  }
+
+  findScriptBySource(source: string): string | null {
+    for (const [id, item] of this.scripts) {
+      if (item.supportedSources.includes(source)) {
+        return id;
+      }
+    }
+
+    if (this.defaultSourceId) {
+      const defaultItem = this.scripts.get(this.defaultSourceId);
+      if (defaultItem?.supportedSources.includes(source)) {
+        return this.defaultSourceId;
+      }
+    }
+
+    return null;
+  }
+
+  async updateScriptSupportedSources(id: string, supportedSources: string[]): Promise<boolean> {
+    const item = this.scripts.get(id);
+    if (!item) {
+      return false;
+    }
+
+    item.supportedSources = supportedSources;
+    item.updatedAt = Date.now();
+    await this.saveToStorage();
+
+    return true;
+  }
+
+  private static MUSIC_URL_CACHE_KEY = ["music_url_cache"];
+  private static CACHE_ENABLED_KEY = ["cache_enabled"];
+  private static SOURCE_STATS_KEY = ["source_stats"];
+  private static SCRIPT_STATS_KEY = ["script_stats"];
+  private static CIRCUIT_BREAKER_KEY = ["circuit_breaker"];
+
+  private musicUrlCacheEnabled: boolean | null = null;
+
+  async isMusicUrlCacheEnabled(): Promise<boolean> {
+    if (this.musicUrlCacheEnabled !== null) {
+      return this.musicUrlCacheEnabled ?? false;
+    }
+
+    if (this.kv) {
+      const result = await this.kv.get<{ enabled: boolean }>(ScriptStorage.CACHE_ENABLED_KEY);
+      if (result.value) {
+        this.musicUrlCacheEnabled = result.value.enabled;
+      } else {
+        this.musicUrlCacheEnabled = false;
+        await this.setMusicUrlCacheEnabled(false);
+      }
+    } else {
+      this.musicUrlCacheEnabled = false;
+    }
+
+    return this.musicUrlCacheEnabled ?? false;
+  }
+
+  async setMusicUrlCacheEnabled(enabled: boolean): Promise<void> {
+    this.musicUrlCacheEnabled = enabled;
+
+    if (this.kv) {
+      await this.kv.set(ScriptStorage.CACHE_ENABLED_KEY, { enabled, updatedAt: Date.now() });
+    }
+  }
+
+  async setMusicUrlCache(source: string, songId: string, url: string, quality: string): Promise<void> {
+    const cacheKey = `${source}_${songId}_${quality}`;
+    const cacheEntry: MusicUrlCacheEntry = {
+      url,
+      cachedAt: Date.now(),
+      source,
+      songId,
+      quality,
+    };
+
+    if (this.kv) {
+      console.log(`[Storage] Setting cache in KV for key: ${cacheKey}`);
+      await this.kv.set([...ScriptStorage.MUSIC_URL_CACHE_KEY, source, songId, quality], cacheEntry);
+      console.log(`[Storage] Cache set successfully in KV for key: ${cacheKey}`);
+    } else {
+      console.log(`[Storage] Setting cache in file for key: ${cacheKey}`);
+      try {
+        let cacheData: Record<string, MusicUrlCacheEntry> = {};
+        try {
+          const data = await Deno.readTextFile(CACHE_FILE);
+          cacheData = JSON.parse(data);
+        } catch {
+        }
+        cacheData[cacheKey] = cacheEntry;
+        await Deno.writeTextFile(CACHE_FILE, JSON.stringify(cacheData, null, 2));
+        console.log(`[Storage] Cache set successfully in file for key: ${cacheKey}`);
+      } catch (error) {
+        console.error(`[Storage] Failed to set cache in file: ${error}`);
+      }
+    }
+  }
+
+  async getMusicUrlCache(source: string, songId: string, quality: string): Promise<MusicUrlCacheEntry | null> {
+    const cacheKey = `${source}_${songId}_${quality}`;
+
+    if (this.kv) {
+      console.log(`[Storage] Getting cache from KV for key: ${cacheKey}`);
+      const result = await this.kv.get<MusicUrlCacheEntry>([...ScriptStorage.MUSIC_URL_CACHE_KEY, source, songId, quality]);
+
+      if (result.value) {
+        const cacheEntry = result.value as MusicUrlCacheEntry;
+        console.log(`[Storage] Cache hit in KV for ${source}/${songId}/${quality}: ${cacheEntry.url?.substring(0, 80)}...`);
+        return cacheEntry;
+      }
+
+      console.log(`[Storage] Cache miss in KV for ${source}/${songId}/${quality}`);
+      return null;
+    } else {
+      console.log(`[Storage] Getting cache from file for key: ${cacheKey}`);
+      try {
+        const data = await Deno.readTextFile(CACHE_FILE);
+        const cacheData: Record<string, MusicUrlCacheEntry> = JSON.parse(data);
+        const cacheEntry = cacheData[cacheKey];
+
+        if (cacheEntry) {
+          console.log(`[Storage] Cache hit in file for ${source}/${songId}/${quality}: ${cacheEntry.url?.substring(0, 80)}...`);
+          return cacheEntry;
+        }
+
+        console.log(`[Storage] Cache miss in file for ${source}/${songId}/${quality}`);
+        return null;
+      } catch (error) {
+        console.log(`[Storage] Failed to read cache from file: ${error}`);
+        return null;
+      }
+    }
+  }
+
+  async clearMusicUrlCache(): Promise<void> {
+    if (this.kv) {
+      const iterator = this.kv.list<MusicUrlCacheEntry>({ prefix: ScriptStorage.MUSIC_URL_CACHE_KEY });
+      const keysToDelete: Deno.KvKey[] = [];
+
+      for await (const res of iterator) {
+        keysToDelete.push(res.key);
+      }
+
+      if (keysToDelete.length > 0) {
+        for (const key of keysToDelete) {
+          await this.kv.delete(key);
+        }
+        console.log(`[Storage] Cleared ${keysToDelete.length} cached music URLs from KV`);
+      }
+    } else {
+      try {
+        await Deno.writeTextFile(CACHE_FILE, "{}");
+        console.log("[Storage] Cleared all cached music URLs from file");
+      } catch (error) {
+        console.error(`[Storage] Failed to clear cache from file: ${error}`);
+      }
+    }
+  }
+
+  async getMusicUrlCacheCount(): Promise<number> {
+    if (this.kv) {
+      let count = 0;
+      const iterator = this.kv.list<MusicUrlCacheEntry>({ prefix: ScriptStorage.MUSIC_URL_CACHE_KEY });
+
+      for await (const _res of iterator) {
+        count++;
+      }
+
+      return count;
+    } else {
+      try {
+        const data = await Deno.readTextFile(CACHE_FILE);
+        const cacheData: Record<string, MusicUrlCacheEntry> = JSON.parse(data);
+        return Object.keys(cacheData).length;
+      } catch {
+        return 0;
+      }
+    }
+  }
+
+  private static readonly ALL_SOURCES = ['kw', 'kg', 'tx', 'wy', 'mg'] as const;
+  private static readonly MIN_SAMPLES = 5;
+  private static readonly EPSILON = 0.05;
+
+  async getSourceStats(): Promise<ScriptSourceStats> {
+    if (this.sourceStatsCache !== null) {
+      return this.sourceStatsCache;
+    }
+
+    if (this.kv) {
+      const result = await this.kv.get<ScriptSourceStats>(ScriptStorage.SOURCE_STATS_KEY);
+      if (result.value) {
+        this.sourceStatsCache = result.value;
+      } else {
+        this.sourceStatsCache = {};
+      }
+    } else {
+      try {
+        const data = await Deno.readTextFile(SOURCE_STATS_FILE);
+        this.sourceStatsCache = JSON.parse(data);
+      } catch {
+        this.sourceStatsCache = {};
+      }
+    }
+
+    return this.sourceStatsCache || {};
+  }
+
+  private async saveAllStats(): Promise<void> {
+    if (this.kv) {
+      const promises = [];
+
+      if (this.scriptStatsCache) {
+        promises.push(this.kv.set(ScriptStorage.SCRIPT_STATS_KEY, this.scriptStatsCache));
+      }
+
+      if (this.sourceStatsCache) {
+        promises.push(this.kv.set(ScriptStorage.SOURCE_STATS_KEY, this.sourceStatsCache));
+      }
+
+      if (this.circuitBreakerCache) {
+        promises.push(this.kv.set(ScriptStorage.CIRCUIT_BREAKER_KEY, this.circuitBreakerCache));
+      }
+
+      await Promise.all(promises);
+      console.log(`[Storage] All stats saved to KV (batch save)`);
+    }
+  }
+
+  async updateSourceStats(scriptId: string, source: string, success: boolean): Promise<void> {
+    const stats = await this.getSourceStats();
+
+    if (!stats[scriptId]) {
+      stats[scriptId] = {};
+    }
+    if (!stats[scriptId][source]) {
+      stats[scriptId][source] = { success: 0, fail: 0 };
+    }
+
+    if (success) {
+      stats[scriptId][source].success++;
+    } else {
+      stats[scriptId][source].fail++;
+    }
+
+    console.log(`[Storage] Updated stats for script ${scriptId}, source ${source}: success=${stats[scriptId][source].success}, fail=${stats[scriptId][source].fail}`);
+
+    // 不立即保存，减少 KV 写入次数
+    // 会在必要时（如服务关闭或熔断器触发时）批量保存
+  }
+
+  private getSuccessRate(stats: SourceStats): number {
+    const total = stats.success + stats.fail;
+    if (total < ScriptStorage.MIN_SAMPLES) return -1;
+    return stats.success / total;
+  }
+
+  async getSortedSourcesBySuccessRate(scriptId: string, excludeSources: string[] = []): Promise<string[]> {
+    const stats = await this.getSourceStats();
+    const scriptStats = stats[scriptId] || {};
+
+    const sources = [...ScriptStorage.ALL_SOURCES].filter(s => !excludeSources.includes(s));
+
+    if (Math.random() < ScriptStorage.EPSILON) {
+      for (let i = sources.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [sources[i], sources[j]] = [sources[j], sources[i]];
+      }
+      console.log(`[Storage] ε-greedy random exploration: ${sources.join(', ')}`);
+      return sources;
+    }
+
+    return sources.sort((a, b) => {
+      const rateA = this.getSuccessRate(scriptStats[a] || { success: 0, fail: 0 });
+      const rateB = this.getSuccessRate(scriptStats[b] || { success: 0, fail: 0 });
+
+      if (rateA === -1 && rateB === -1) {
+        return Math.random() - 0.5;
+      }
+      if (rateA === -1) return 1;
+      if (rateB === -1) return -1;
+
+      if (Math.abs(rateA - rateB) < 0.01) {
+        return Math.random() - 0.5;
+      }
+
+      return rateB - rateA;
+    });
+  }
+
+  async getSourceStatsForScript(scriptId: string): Promise<{ [source: string]: SourceStats }> {
+    const stats = await this.getSourceStats();
+    return stats[scriptId] || {};
+  }
+
+  private generateApiKey(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  async getApiKey(): Promise<string> {
+    const envKey = Deno.env.get("API_KEY") || Deno.env.get("api_key");
+    if (envKey) {
+      console.log("[Storage] Using API_KEY from environment variable:", envKey);
+      await this.saveApiKey(envKey);
+      return envKey;
+    }
+
+    if (this.kv) {
+      try {
+        const result = await this.kv.get<string>(API_KEY_KV_KEY);
+        if (result.value) {
+          console.log("[Storage] Loaded API key from KV");
+          return result.value;
+        }
+      } catch (error) {
+        console.error("[Storage] Failed to read API key from KV:", error);
+      }
+    }
+
+    if (!isDenoDeploy) {
+      try {
+        const fileContent = await Deno.readTextFile(API_KEY_FILE);
+        const data = JSON.parse(fileContent);
+        if (data.apiKey) {
+          console.log("[Storage] Loaded API key from file");
+          return data.apiKey;
+        }
+      } catch {
+        // 文件不存在
+      }
+    }
+
+    const newKey = this.generateApiKey();
+    console.log("[Storage] Generated new API key:", newKey);
+    await this.saveApiKey(newKey);
+    return newKey;
+  }
+
+  private async saveApiKey(key: string): Promise<void> {
+    if (this.kv) {
+      try {
+        await this.kv.set(API_KEY_KV_KEY, key);
+        console.log("[Storage] API key saved to KV");
+      } catch (error) {
+        console.error("[Storage] Failed to save API key to KV:", error);
+      }
+    }
+
+    if (!isDenoDeploy) {
+      try {
+        await Deno.writeTextFile(API_KEY_FILE, JSON.stringify({ apiKey: key, updatedAt: Date.now() }, null, 2));
+        console.log("[Storage] API key saved to file");
+      } catch (error) {
+        console.error("[Storage] Failed to save API key to file:", error);
+      }
+    }
+  }
+}
+
+interface MusicUrlCacheEntry {
+  url: string;
+  cachedAt: number;
+  source: string;
+  songId: string;
+  quality: string;
+}
+
+interface SourceStats {
+  success: number;
+  fail: number;
+}
+
+interface ScriptSourceStats {
+  [scriptId: string]: {
+    [source: string]: SourceStats;
+  };
+}
+
+interface ScriptStats {
+  success: number;
+  fail: number;
+  lastSuccessAt: number;
+  lastFailAt: number;
+  avgResponseTime: number;
+  totalRequests: number;
+}
+
+interface ScriptStatsData {
+  [scriptId: string]: ScriptStats;
+}
+
+interface CircuitBreakerState {
+  isTripped: boolean;
+  tripCount: number;
+  lastTripAt: number;
+  resetAt: number;
+  consecutiveFails: number;
+}
+
+interface CircuitBreakerData {
+  [scriptId: string]: CircuitBreakerState;
+}
+
